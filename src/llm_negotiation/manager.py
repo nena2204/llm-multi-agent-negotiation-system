@@ -1,7 +1,21 @@
 from typing import Any, Dict, List, Optional
 from .agents import BuyerAgent, SellerAgent, MediatorAgent
+from .domain import (
+    AcceptAction,
+    CounterAction,
+    NumericIssueValue,
+    NegotiationAction,
+    Offer,
+    OfferId,
+    ProposeAction,
+    ParticipantId,
+    RequestMediationAction,
+    price_only_from_legacy,
+)
+from .domain.legacy import BUYER_ID, PRICE_ISSUE_ID, SELLER_ID
 from .judge import Judge
 from .learning import LearningAgent
+from .protocol import FeasibleRegionStatus, NegotiationProtocol, NegotiationSession, ProtocolPhase
 
 
 class NegotiationManager:
@@ -17,6 +31,9 @@ class NegotiationManager:
         self.deal_reached: bool = False
         self.final_price: Optional[float] = None
         self.mediator_suggestion: Optional[float] = None
+        self.protocol_state: Optional[NegotiationSession] = None
+        self._protocol: Optional[NegotiationProtocol] = None
+        self._offer_sequence = 0
 
     def _record(self, message: str):
         self.history.append(message)
@@ -31,9 +48,63 @@ class NegotiationManager:
         self.deal_reached = False
         self.final_price = None
         self.mediator_suggestion = None
+        self._offer_sequence = 0
 
-    def run(self) -> Dict[str, Any]:
-        self._reset()
+        migration = price_only_from_legacy(self.product_name, self.buyer, self.seller, self.rounds)
+        self._protocol = NegotiationProtocol(
+            scenario=migration.scenario,
+            maximum_rounds=self.rounds + 1,
+            initial_turn=BUYER_ID,
+            feasible_region=(
+                FeasibleRegionStatus.FEASIBLE
+                if self.buyer.max_price >= self.seller.min_acceptable
+                else FeasibleRegionStatus.IMPOSSIBLE
+            ),
+        )
+        self.protocol_state = self._protocol.create_session()
+        if self.protocol_state.phase is ProtocolPhase.FAILED:
+            return
+        self._apply_protocol_action(
+            ProposeAction(
+                actor_id=BUYER_ID,
+                recipients=(SELLER_ID,),
+                round_number=self.protocol_state.round_number,
+                offer=migration.buyer_initial_offer,
+            )
+        )
+
+    def _next_price_offer(self, actor: str, price: float) -> Offer:
+        self._offer_sequence += 1
+        return Offer(
+            offer_id=OfferId(f"legacy-{actor}-{self._offer_sequence}"),
+            values=(NumericIssueValue(issue_id=PRICE_ISSUE_ID, value=price),),
+        )
+
+    def _apply_protocol_action(self, action: NegotiationAction) -> None:
+        if self.protocol_state is None or self._protocol is None:
+            raise RuntimeError("protocol session has not been initialized")
+        self.protocol_state = self._protocol.transition(self.protocol_state, action).state
+
+    def _accept_outstanding_offer(self, actor_id: ParticipantId) -> None:
+        if self.protocol_state is None or self.protocol_state.latest_valid_offer is None:
+            raise RuntimeError("cannot accept without an outstanding protocol offer")
+        self._apply_protocol_action(
+            AcceptAction(
+                actor_id=actor_id,
+                round_number=self.protocol_state.round_number,
+                offer_id=self.protocol_state.latest_valid_offer.offer_id,
+            )
+        )
+        agreement = self.protocol_state.outcome.agreement if self.protocol_state.outcome else None
+        if agreement is None:
+            raise RuntimeError("legacy bilateral acceptance did not produce an agreement")
+        price_value = agreement.offer.value_for(PRICE_ISSUE_ID)
+        if not isinstance(price_value, NumericIssueValue):
+            raise RuntimeError("legacy price agreement does not contain a numeric price")
+        self.deal_reached = True
+        self.final_price = round(price_value.value, 2)
+
+    def _run_price_negotiation(self) -> int:
         # initial proposals
         self._record(self.seller.propose_initial())
         self._record(self.buyer.propose_initial())
@@ -43,29 +114,69 @@ class NegotiationManager:
             rounds_used = round_number
             remaining = self.rounds - round_number + 1
             # Seller gives a price -> Buyer counters
+            seller_accepts = self.buyer.current_offer >= self.seller.current_offer
             seller_msg = self.seller.counter_offer(self.buyer.current_offer, remaining)
             self._record(seller_msg)
+            if seller_accepts:
+                self._accept_outstanding_offer(SELLER_ID)
+                self._record(self.buyer.speak(f"Deal accepted at ${self.final_price:.2f}."))
+                break
+
+            seller_offer = self._next_price_offer("seller", self.seller.current_offer)
+            self._apply_protocol_action(
+                CounterAction(
+                    actor_id=SELLER_ID,
+                    recipients=(BUYER_ID,),
+                    round_number=self.protocol_state.round_number,
+                    offer=seller_offer,
+                    responds_to=self.protocol_state.latest_valid_offer.offer_id,
+                )
+            )
             # check acceptance
             if self.buyer.current_offer >= self.seller.current_offer:
-                self.deal_reached = True
-                self.final_price = round(self.seller.current_offer, 2)
+                self._accept_outstanding_offer(BUYER_ID)
                 self._record(self.buyer.speak(f"Deal accepted at ${self.final_price:.2f}."))
                 break
 
             buyer_msg = self.buyer.counter_offer(self.seller.current_offer, remaining)
             self._record(buyer_msg)
+            buyer_offer = self._next_price_offer("buyer", self.buyer.current_offer)
+            self._apply_protocol_action(
+                CounterAction(
+                    actor_id=BUYER_ID,
+                    recipients=(SELLER_ID,),
+                    round_number=self.protocol_state.round_number,
+                    offer=buyer_offer,
+                    responds_to=self.protocol_state.latest_valid_offer.offer_id,
+                )
+            )
             # check acceptance
             if self.buyer.current_offer >= self.seller.current_offer:
-                self.deal_reached = True
-                self.final_price = round(self.buyer.current_offer, 2)
+                self._accept_outstanding_offer(SELLER_ID)
                 self._record(self.seller.speak(f"Deal accepted at ${self.final_price:.2f}."))
                 break
 
         if not self.deal_reached:
+            self._apply_protocol_action(
+                RequestMediationAction(
+                    actor_id=self.protocol_state.current_turn,
+                    round_number=self.protocol_state.round_number,
+                    reason="Legacy price negotiation exhausted its configured rounds.",
+                )
+            )
             # mediator suggests compromise
             compromise = round((self.buyer.max_price + self.seller.min_acceptable) / 2.0, 2)
             self.mediator_suggestion = compromise
             self._record(self.mediator.suggest_compromise(self.buyer.max_price, self.seller.min_acceptable))
+        return rounds_used
+
+    def run(self) -> Dict[str, Any]:
+        self._reset()
+        if self.protocol_state.phase is ProtocolPhase.FAILED:
+            rounds_used = 0
+            self._record(f"System (protocol): {self.protocol_state.outcome.reason}")
+        else:
+            rounds_used = self._run_price_negotiation()
 
         # judge evaluation
         judge = Judge()

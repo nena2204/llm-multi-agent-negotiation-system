@@ -44,3 +44,31 @@ class UnknownParticipantError(DomainError):
 
 class OutcomeValidationError(DomainError):
     """Raised when an agreement or outcome is inconsistent with a scenario."""
+
+
+class ProtocolError(DomainError):
+    """Base error for illegal negotiation protocol transitions."""
+
+
+class IllegalPhaseError(ProtocolError):
+    """Raised when an action is not legal in the current protocol phase."""
+
+
+class IllegalActorError(ProtocolError):
+    """Raised when an action is submitted by the wrong participant."""
+
+
+class IllegalActionError(ProtocolError):
+    """Raised when an action type is not currently legal."""
+
+
+class StaleOfferError(ProtocolError):
+    """Raised when an action does not reference the outstanding offer."""
+
+
+class RoundMismatchError(ProtocolError):
+    """Raised when an action claims a different round than the session."""
+
+
+class ReplayError(ProtocolError):
+    """Raised when recorded events cannot be replayed deterministically."""

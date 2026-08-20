@@ -22,6 +22,17 @@ within an absolute tolerance of `1e-6`.
 The current deterministic price negotiation remains available through a compatibility adapter while
 the orchestration layer is migrated incrementally.
 
+The `llm_negotiation.protocol` module defines the authoritative negotiation lifecycle. It validates
+typed actions against the current phase, participant turn, outstanding offer, and round deadline;
+every successful transition emits a replayable event. Natural-language messages never change
+protocol meaning.
+
+Protocol phases are `created`, `active`, `mediation`, `agreed`, `failed`, `withdrawn`, and `expired`.
+A round is one complete rotation through the configured participant order, anchored to the initial
+participant. Mediation is entered by an explicit `request_mediation` action; no mediator policy is
+implemented yet. A trusted coordinator may mark the feasible region `impossible` during session
+creation, allowing deterministic failure without adding private preference data to public state.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install

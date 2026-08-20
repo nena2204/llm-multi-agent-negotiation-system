@@ -4,6 +4,7 @@
 
 - `src/llm_negotiation/`: the single Python package implementation.
 - `src/llm_negotiation/domain/`: typed public negotiation models, private preferences, and adapters.
+- `src/llm_negotiation/protocol.py`: deterministic protocol state machine and replayable events.
 - `tests/`: pytest unit and CLI smoke tests.
 - `pyproject.toml`: packaging, dependencies, console script, and pytest configuration.
 
@@ -26,6 +27,7 @@ Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and ru
 - Keep all user-facing imports under `llm_negotiation`; do not recreate a root compatibility package.
 - Preserve deterministic negotiation behavior unless a change explicitly requires otherwise.
 - Keep private participant preferences out of public scenarios, offers, actions, and presentation output.
+- Keep protocol transitions deterministic, immutable, and independent of agent implementations.
 - Validate public inputs and add focused tests for behavioral changes.
 - Keep runtime dependencies minimal and separate optional/development dependencies.
 - Do not add LLM calls, databases, or web APIs unless a task explicitly requests them.

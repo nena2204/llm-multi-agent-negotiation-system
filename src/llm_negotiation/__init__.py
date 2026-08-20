@@ -3,6 +3,7 @@
 __all__ = [
     "agents",
     "domain",
+    "protocol",
     "manager",
     "judge",
     "learning",

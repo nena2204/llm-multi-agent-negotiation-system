@@ -4,6 +4,7 @@ import pytest
 
 from llm_negotiation.agents import BuyerAgent, SellerAgent
 from llm_negotiation.manager import NegotiationManager
+from llm_negotiation.protocol import ProtocolPhase
 
 
 def make_manager(
@@ -33,29 +34,55 @@ def make_manager(
 
 
 def test_deal_is_reached_and_rounds_are_counted():
-    result = make_manager().run()
+    manager = make_manager()
+    result = manager.run()
 
     assert result["deal_reached"] is True
     assert result["final_price"] == 100.0
     assert result["mediator_suggestion"] is None
     assert result["evaluation"]["rounds_used"] == 1
+    assert manager.protocol_state.phase is ProtocolPhase.AGREED
+    assert manager.protocol_state.outcome.agreement is not None
 
 
 def test_failed_negotiation_invokes_mediator():
-    result = make_manager(
+    manager = make_manager(
+        buyer_initial=10,
+        buyer_max=100,
+        seller_initial=100,
+        seller_min=80,
+        rounds=1,
+        strategy="aggressive",
+    )
+    result = manager.run()
+
+    assert result["deal_reached"] is False
+    assert result["final_price"] is None
+    assert result["mediator_suggestion"] == 90.0
+    assert result["evaluation"]["rounds_used"] == 1
+    assert result["history"][-1] == "Mediator (mediator): I suggest a compromise price of $90.00."
+    assert manager.protocol_state.phase is ProtocolPhase.MEDIATION
+    assert manager.protocol_state.outcome is None
+
+
+def test_impossible_price_region_fails_before_bargaining():
+    manager = make_manager(
         buyer_initial=10,
         buyer_max=40,
         seller_initial=100,
         seller_min=80,
         rounds=2,
         strategy="aggressive",
-    ).run()
+    )
+
+    result = manager.run()
 
     assert result["deal_reached"] is False
-    assert result["final_price"] is None
-    assert result["mediator_suggestion"] == 60.0
-    assert result["evaluation"]["rounds_used"] == 2
-    assert result["history"][-1] == "Mediator (mediator): I suggest a compromise price of $60.00."
+    assert result["mediator_suggestion"] is None
+    assert result["evaluation"]["rounds_used"] == 0
+    assert result["history"] == ["System (protocol): The feasible region is empty."]
+    assert manager.protocol_state.phase is ProtocolPhase.FAILED
+    assert manager.protocol_state.outcome is not None
 
 
 @pytest.mark.parametrize(
