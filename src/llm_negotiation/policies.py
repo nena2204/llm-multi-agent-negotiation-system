@@ -6,10 +6,9 @@ import math
 import random
 from typing import ClassVar, Dict, Optional, Protocol, Tuple, runtime_checkable
 
-from pydantic import Field, model_validator
-
 from .domain import (
     AcceptAction,
+    ActionType,
     CategoricalIssue,
     CategoricalIssueValue,
     CategoricalPreference,
@@ -22,76 +21,34 @@ from .domain import (
     NumericPreference,
     Offer,
     OfferId,
-    Participant,
     ParticipantId,
     ParticipantPreferences,
     PreferenceDirection,
     ProposeAction,
     calculate_utility,
 )
-from .domain.models import DomainModel
-from .protocol import ActionAppliedEvent, NegotiationSession, ProtocolPhase, TERMINAL_PHASES
+from .memory import (
+    AgentObservation,
+    AgentProfile,
+    MemorySnapshot,
+    PublicAgentIdentity,
+)
+from .protocol import ProtocolPhase, TERMINAL_PHASES
 
 
 UTILITY_TOLERANCE = 1e-9
 
 
 class PolicyError(ValueError):
-    """Raised when a policy cannot act on the supplied observation."""
-
-
-class PublicAgentIdentity(DomainModel):
-    participant: Participant
-    persona: str = Field(default="", max_length=1000)
-
-
-class AgentProfile(DomainModel):
-    """Immutable agent configuration containing public identity and private preferences."""
-
-    identity: PublicAgentIdentity
-    preferences: ParticipantPreferences
-
-    @model_validator(mode="after")
-    def matching_identity(self) -> AgentProfile:
-        if self.identity.participant.participant_id != self.preferences.participant_id:
-            raise ValueError("agent identity and private preferences must belong to the same participant")
-        return self
-
-
-class AgentObservation(DomainModel):
-    """The complete information visible to one deterministic policy.
-
-    It contains public scenario/session data and only the observing participant's profile.
-    No opponent preference collection is present.
-    """
-
-    scenario: NegotiationScenario
-    session: NegotiationSession
-    own_profile: AgentProfile
-
-    @model_validator(mode="after")
-    def consistent_observation(self) -> AgentObservation:
-        participant_id = self.own_profile.identity.participant.participant_id
-        if self.session.scenario_id != self.scenario.scenario_id:
-            raise ValueError("observation session and scenario identifiers must match")
-        scenario_participants = tuple(item.participant_id for item in self.scenario.participants)
-        if self.session.participants != scenario_participants:
-            raise ValueError("observation session participants must match the scenario")
-        if participant_id not in self.session.participants:
-            raise ValueError("observing participant must belong to the session")
-        return self
-
-    @property
-    def participant_id(self) -> ParticipantId:
-        return self.own_profile.identity.participant.participant_id
+    """Raised when a policy cannot act from the supplied memory snapshot."""
 
 
 @runtime_checkable
 class NegotiationPolicy(Protocol):
     name: str
 
-    def choose_action(self, observation: AgentObservation) -> NegotiationAction:
-        """Return one typed action without mutating protocol state."""
+    def choose_action(self, memory: MemorySnapshot) -> NegotiationAction:
+        """Return one typed action from bounded participant-specific memory."""
 
 
 def _preferences_by_issue(preferences: ParticipantPreferences) -> Dict[IssueId, object]:
@@ -198,89 +155,93 @@ def generate_offer_for_utility(
     return offer
 
 
-def _progress(session: NegotiationSession) -> float:
-    if session.maximum_rounds == 1:
+def _progress(memory: MemorySnapshot) -> float:
+    if memory.working.deadline_round == 1:
         return 1.0
-    return (session.round_number - 1) / (session.maximum_rounds - 1)
+    return (memory.working.round_number - 1) / (memory.working.deadline_round - 1)
 
 
-def _offer_id(observation: AgentObservation, policy_name: str, salt: str = "") -> OfferId:
+def _offer_id(memory: MemorySnapshot, policy_name: str, salt: str = "") -> OfferId:
     source = (
-        f"{observation.session.scenario_id}|{observation.participant_id}|{policy_name}|"
-        f"{observation.session.round_number}|{len(observation.session.event_sequence)}|{salt}"
+        f"{memory.working.negotiation_id}|{memory.participant_id}|{policy_name}|"
+        f"{memory.working.round_number}|{memory.working.public_event_count}|{salt}"
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
     return OfferId(f"offer-{digest}")
 
 
-def _recipients(observation: AgentObservation) -> Tuple[ParticipantId, ...]:
+def _recipients(memory: MemorySnapshot) -> Tuple[ParticipantId, ...]:
     return tuple(
-        participant_id
-        for participant_id in observation.session.participants
-        if participant_id != observation.participant_id
+        participant.participant_id
+        for participant in memory.long_term.public_participants
+        if participant.participant_id != memory.participant_id
     )
 
 
-def _public_offer_history(observation: AgentObservation) -> Tuple[Tuple[ParticipantId, Offer], ...]:
-    entries = []
-    for event in observation.session.event_sequence:
-        if isinstance(event, ActionAppliedEvent) and isinstance(event.action, (ProposeAction, CounterAction)):
-            entries.append((event.action.actor_id, event.action.offer))
-    return tuple(entries)
+def _public_offer_history(memory: MemorySnapshot) -> Tuple[Tuple[ParticipantId, Offer], ...]:
+    return tuple(
+        (entry.actor_id, entry.offer) for entry in memory.working.recent_offers
+    )
 
 
 class _OfferPolicy:
     name: ClassVar[str]
 
-    def target_utility(self, observation: AgentObservation) -> float:
+    def target_utility(self, memory: MemorySnapshot) -> float:
         raise NotImplementedError
 
-    def choose_action(self, observation: AgentObservation) -> NegotiationAction:
-        if observation.session.phase in TERMINAL_PHASES:
+    def choose_action(self, memory: MemorySnapshot) -> NegotiationAction:
+        if memory.working.phase in TERMINAL_PHASES:
             raise PolicyError("a policy cannot act in a terminal session")
-        if observation.session.current_turn != observation.participant_id:
+        if memory.working.current_turn != memory.participant_id:
             raise PolicyError(
-                f"policy participant '{observation.participant_id}' does not hold the current turn"
+                f"policy participant '{memory.participant_id}' does not hold the current turn"
             )
-        if observation.session.phase not in {
+        if memory.working.phase not in {
             ProtocolPhase.CREATED,
             ProtocolPhase.ACTIVE,
             ProtocolPhase.MEDIATION,
         }:
-            raise PolicyError(f"policy cannot act in phase '{observation.session.phase.value}'")
+            raise PolicyError(f"policy cannot act in phase '{memory.working.phase.value}'")
 
-        preferences = observation.own_profile.preferences
-        target = max(preferences.reservation.reservation_utility, self.target_utility(observation))
-        outstanding = observation.session.latest_valid_offer
+        preferences = memory.long_term.own_preferences
+        target = max(preferences.reservation.reservation_utility, self.target_utility(memory))
+        outstanding = memory.working.outstanding_offer
         if outstanding is not None:
-            offered_utility = calculate_utility(observation.scenario, outstanding, preferences)
+            offered_utility = calculate_utility(memory.scenario, outstanding, preferences)
             if offered_utility + UTILITY_TOLERANCE >= target and offered_utility + UTILITY_TOLERANCE >= (
                 preferences.reservation.reservation_utility
             ):
+                if ActionType.ACCEPT not in memory.working.legal_actions:
+                    raise PolicyError("working memory does not permit accepting the outstanding offer")
                 return AcceptAction(
-                    actor_id=observation.participant_id,
-                    recipients=_recipients(observation),
-                    round_number=observation.session.round_number,
+                    actor_id=memory.participant_id,
+                    recipients=_recipients(memory),
+                    round_number=memory.working.round_number,
                     offer_id=outstanding.offer_id,
                 )
 
         generated = generate_offer_for_utility(
-            observation.scenario,
+            memory.scenario,
             preferences,
             target,
-            _offer_id(observation, self.name, self._offer_salt(observation)),
+            _offer_id(memory, self.name, self._offer_salt(memory)),
         )
         common = {
-            "actor_id": observation.participant_id,
-            "recipients": _recipients(observation),
-            "round_number": observation.session.round_number,
+            "actor_id": memory.participant_id,
+            "recipients": _recipients(memory),
+            "round_number": memory.working.round_number,
             "offer": generated,
         }
         if outstanding is None:
+            if ActionType.PROPOSE not in memory.working.legal_actions:
+                raise PolicyError("working memory does not permit a proposal")
             return ProposeAction(**common)
+        if ActionType.COUNTER not in memory.working.legal_actions:
+            raise PolicyError("working memory does not permit a counteroffer")
         return CounterAction(**common, responds_to=outstanding.offer_id)
 
-    def _offer_salt(self, observation: AgentObservation) -> str:
+    def _offer_salt(self, memory: MemorySnapshot) -> str:
         return ""
 
 
@@ -290,8 +251,8 @@ class FixedPolicy(_OfferPolicy):
 
     name: ClassVar[str] = "fixed"
 
-    def target_utility(self, observation: AgentObservation) -> float:
-        return maximum_attainable_utility(observation.scenario, observation.own_profile.preferences)
+    def target_utility(self, memory: MemorySnapshot) -> float:
+        return maximum_attainable_utility(memory.scenario, memory.long_term.own_preferences)
 
 
 NoConcessionPolicy = FixedPolicy
@@ -308,16 +269,16 @@ class TimeDependentAspirationPolicy(_OfferPolicy):
         if not math.isfinite(self.beta) or self.beta <= 0:
             raise ValueError("beta must be a finite positive number")
 
-    def concession_fraction(self, observation: AgentObservation) -> float:
-        return _progress(observation.session) ** (1.0 / self.beta)
+    def concession_fraction(self, memory: MemorySnapshot) -> float:
+        return _progress(memory) ** (1.0 / self.beta)
 
-    def target_utility(self, observation: AgentObservation) -> float:
-        preferences = observation.own_profile.preferences
-        maximum = maximum_attainable_utility(observation.scenario, preferences)
+    def target_utility(self, memory: MemorySnapshot) -> float:
+        preferences = memory.long_term.own_preferences
+        maximum = maximum_attainable_utility(memory.scenario, preferences)
         reservation = preferences.reservation.reservation_utility
-        return reservation + (maximum - reservation) * (1.0 - self.concession_fraction(observation))
+        return reservation + (maximum - reservation) * (1.0 - self.concession_fraction(memory))
 
-    def _offer_salt(self, observation: AgentObservation) -> str:
+    def _offer_salt(self, memory: MemorySnapshot) -> str:
         return f"beta={self.beta}"
 
 
@@ -351,19 +312,19 @@ class TitForTatPolicy(_OfferPolicy):
 
     name: ClassVar[str] = "tit-for-tat"
 
-    def target_utility(self, observation: AgentObservation) -> float:
-        preferences = observation.own_profile.preferences
+    def target_utility(self, memory: MemorySnapshot) -> float:
+        preferences = memory.long_term.own_preferences
         reservation = preferences.reservation.reservation_utility
-        maximum = maximum_attainable_utility(observation.scenario, preferences)
-        history = _public_offer_history(observation)
-        own_offers = [offer for actor, offer in history if actor == observation.participant_id]
-        opponent_offers = [offer for actor, offer in history if actor != observation.participant_id]
+        maximum = maximum_attainable_utility(memory.scenario, preferences)
+        history = _public_offer_history(memory)
+        own_offers = [offer for actor, offer in history if actor == memory.participant_id]
+        opponent_offers = [offer for actor, offer in history if actor != memory.participant_id]
         if not own_offers or len(opponent_offers) < 2:
             return maximum
-        previous_opponent = calculate_utility(observation.scenario, opponent_offers[-2], preferences)
-        latest_opponent = calculate_utility(observation.scenario, opponent_offers[-1], preferences)
+        previous_opponent = calculate_utility(memory.scenario, opponent_offers[-2], preferences)
+        latest_opponent = calculate_utility(memory.scenario, opponent_offers[-1], preferences)
         opponent_concession = max(0.0, latest_opponent - previous_opponent)
-        previous_own = calculate_utility(observation.scenario, own_offers[-1], preferences)
+        previous_own = calculate_utility(memory.scenario, own_offers[-1], preferences)
         return max(reservation, previous_own - opponent_concession)
 
 
@@ -374,21 +335,21 @@ class SeededRandomPolicy(_OfferPolicy):
     seed: int = 0
     name: ClassVar[str] = "seeded-random"
 
-    def _random(self, observation: AgentObservation) -> random.Random:
+    def _random(self, memory: MemorySnapshot) -> random.Random:
         source = (
-            f"{self.seed}|{observation.session.scenario_id}|{observation.participant_id}|"
-            f"{observation.session.round_number}|{len(observation.session.event_sequence)}"
+            f"{self.seed}|{memory.working.negotiation_id}|{memory.participant_id}|"
+            f"{memory.working.round_number}|{memory.working.public_event_count}"
         )
         digest = hashlib.sha256(source.encode("utf-8")).digest()
         return random.Random(int.from_bytes(digest[:8], "big"))
 
-    def target_utility(self, observation: AgentObservation) -> float:
-        preferences = observation.own_profile.preferences
+    def target_utility(self, memory: MemorySnapshot) -> float:
+        preferences = memory.long_term.own_preferences
         reservation = preferences.reservation.reservation_utility
-        maximum = maximum_attainable_utility(observation.scenario, preferences)
-        return reservation + self._random(observation).random() * (maximum - reservation)
+        maximum = maximum_attainable_utility(memory.scenario, preferences)
+        return reservation + self._random(memory).random() * (maximum - reservation)
 
-    def _offer_salt(self, observation: AgentObservation) -> str:
+    def _offer_salt(self, memory: MemorySnapshot) -> str:
         return f"seed={self.seed}"
 
 

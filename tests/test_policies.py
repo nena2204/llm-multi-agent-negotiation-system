@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from llm_negotiation.benchmark import run_policy_session
+from llm_negotiation.memory import AgentMemory, MemoryLimits, MemorySnapshot
 from llm_negotiation.domain import (
     AcceptAction,
     CategoryUtility,
@@ -132,12 +133,31 @@ def empty_observation(round_number, maximum_rounds=5, participant_id=ALICE):
     )
 
 
-def action_utility(action, observation):
+def memory_snapshot(observation):
+    protocol = NegotiationProtocol(
+        observation.scenario,
+        maximum_rounds=observation.session.maximum_rounds,
+        initial_turn=observation.session.participants[0],
+    )
+    return AgentMemory(observation.own_profile, observation.scenario).update(
+        observation,
+        legal_actions=protocol.legal_action_types(
+            observation.session,
+            observation.participant_id,
+        ),
+    )
+
+
+def empty_memory(round_number, maximum_rounds=5, participant_id=ALICE):
+    return memory_snapshot(empty_observation(round_number, maximum_rounds, participant_id))
+
+
+def action_utility(action, memory):
     assert isinstance(action, (ProposeAction, CounterAction))
     return calculate_utility(
-        observation.scenario,
+        memory.scenario,
         action.offer,
-        observation.own_profile.preferences,
+        memory.long_term.own_preferences,
     )
 
 
@@ -162,6 +182,10 @@ def test_observation_exposes_only_own_private_preferences():
     assert "ALICE PRIVATE BATNA" in payload
     assert "BOB PRIVATE BATNA" not in payload
     assert not hasattr(observation, "opponent_preferences")
+
+    snapshot = memory_snapshot(observation)
+    assert isinstance(snapshot, MemorySnapshot)
+    assert "session" not in MemorySnapshot.model_fields
 
 
 def test_multi_issue_offer_generation_is_legal_and_reservation_safe():
@@ -190,7 +214,7 @@ def test_time_based_concessions_are_monotonic_and_strategically_distinct():
     trajectories = {}
     for name, policy in policies.items():
         trajectories[name] = tuple(
-            action_utility(policy.choose_action(empty_observation(round_number)), empty_observation(round_number))
+            action_utility(policy.choose_action(empty_memory(round_number)), empty_memory(round_number))
             for round_number in range(1, 6)
         )
         assert all(
@@ -227,11 +251,12 @@ def test_policy_never_accepts_below_reservation_and_counter_is_safe():
     )
     observation = AgentObservation(scenario=scenario, session=session, own_profile=alice_profile())
 
-    action = ConcederPolicy().choose_action(observation)
+    memory = memory_snapshot(observation)
+    action = ConcederPolicy().choose_action(memory)
 
     assert isinstance(action, CounterAction)
     assert calculate_utility(scenario, low_offer, alice_profile().preferences) < 0.3
-    assert action_utility(action, observation) >= 0.3 - 1e-9
+    assert action_utility(action, memory) >= 0.3 - 1e-9
 
 
 def test_policy_accepts_offer_meeting_aspiration_and_reservation():
@@ -258,13 +283,13 @@ def test_policy_accepts_offer_meeting_aspiration_and_reservation():
         own_profile=alice_profile(),
     )
 
-    action = FixedPolicy().choose_action(observation)
+    action = FixedPolicy().choose_action(memory_snapshot(observation))
     assert isinstance(action, AcceptAction)
     assert action.offer_id == excellent_offer.offer_id
 
 
 def test_seeded_random_policy_is_reproducible_and_seed_sensitive():
-    observation = empty_observation(round_number=3)
+    observation = empty_memory(round_number=3)
 
     first = SeededRandomPolicy(seed=7).choose_action(observation)
     repeated = SeededRandomPolicy(seed=7).choose_action(observation)
@@ -314,7 +339,19 @@ def test_tit_for_tat_matches_observed_opponent_concession_without_private_data()
     for action in actions:
         state = engine.transition(state, action).state
 
-    observation = AgentObservation(scenario=scenario, session=state, own_profile=alice_profile())
+    source_observation = AgentObservation(
+        scenario=scenario,
+        session=state,
+        own_profile=alice_profile(),
+    )
+    observation = AgentMemory(
+        alice_profile(),
+        scenario,
+        limits=MemoryLimits(episodic_event_limit=2, episodic_character_limit=700),
+    ).update(
+        source_observation,
+        legal_actions=engine.legal_action_types(state, ALICE),
+    )
     policy = TitForTatPolicy()
 
     assert policy.target_utility(observation) == pytest.approx(0.65)
@@ -345,7 +382,7 @@ def test_policy_rejects_observation_when_it_does_not_hold_turn():
     )
 
     with pytest.raises(PolicyError, match="does not hold"):
-        LinearConcessionPolicy().choose_action(observation)
+        LinearConcessionPolicy().choose_action(memory_snapshot(observation))
 
 
 @pytest.mark.parametrize(
@@ -369,7 +406,7 @@ def test_every_baseline_produces_a_typed_scenario_valid_action(policy):
         session=state,
         own_profile=alice_profile(),
     )
-    action = policy.choose_action(observation)
+    action = policy.choose_action(memory_snapshot(observation))
 
     assert observation.scenario.validate_action(action) is action
     assert isinstance(action, ProposeAction)

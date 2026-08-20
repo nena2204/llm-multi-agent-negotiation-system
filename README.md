@@ -36,10 +36,9 @@ creation, allowing deterministic failure without adding private preference data 
 
 ## Baseline negotiation policies
 
-Policies implement the typed `NegotiationPolicy` interface. They receive an immutable
-`AgentObservation` containing the public scenario, public protocol session, and only that agent's
-own `AgentProfile`. The profile combines public identity and persona fields with private preferences;
-opponent preferences and BATNA data are never included in an observation.
+Policies implement the typed `NegotiationPolicy` interface. They receive an immutable, bounded
+`MemorySnapshot`, not the full protocol session. The snapshot contains public scenario facts and
+only that agent's own preferences; opponent preferences and BATNA data are never included.
 
 The following deterministic baselines are available in `llm_negotiation.policies`:
 
@@ -52,7 +51,7 @@ The following deterministic baselines are available in `llm_negotiation.policies
 - `TitForTatPolicy`: reduces its previous aspiration by the opponent's latest positive concession,
   measured using only its own utility model and public offers.
 - `SeededRandomPolicy(seed)`: chooses a reproducible pseudo-random aspiration between reservation
-  and maximum utility for each observation.
+  and maximum utility for each memory snapshot.
 
 Multi-issue proposals move numeric and categorical issue values toward a utility target while
 remaining inside public issue bounds. A policy never knowingly accepts or proposes below its own
@@ -83,6 +82,30 @@ traffic. Audit access must be explicitly configured. Protocol events and related
 a correlation identifier, and `EpisodeRecord` preserves both ordered streams for deterministic
 serialization and replay. Sending persuasive content or a `mediation_request` message does not
 execute a protocol action, accept an offer, withdraw, or enter mediation.
+
+## Agent memory
+
+`llm_negotiation.memory` owns one isolated memory stack per participant. A full `AgentObservation`
+and that participant's authorized message inbox are ingestion inputs only; neither the full
+`NegotiationSession` nor the message-bus audit log appears in the policy-facing snapshot.
+
+- `LongTermMemory` stores stable public identity, role, persona, goals, protocol rules, public issue
+  descriptions, strategy guidance, learned strategy facts, and only the owner's private preferences.
+- `WorkingMemory` stores authoritative legal actions, the outstanding offer, current round and
+  deadline, bounded visible-message digests, recent public offers, owner-specific utility estimates,
+  terminal outcome, ingestion cursors, and a concise active plan.
+- `EpisodicMemory` stores a bounded sequence of observations, owner actions, observed public actions,
+  received messages, outcomes, and deterministic factual summaries.
+
+`MemoryLimits` independently bounds episodic events, episodic characters/tokens, working messages,
+recent offers, and learned strategy facts. `DeterministicMemorySummarizer` performs non-LLM
+compaction; current offer, recent offer utilities, phase, legal actions, round/deadline, and outcome
+remain in working memory even when older episodes are summarized. Snapshots persist their limits,
+history digest, and ingestion cursors under schema version `1.0`, so they can be saved, loaded, and
+resumed without re-ingesting old events or messages.
+Starting a new negotiation clears working and episodic memory while optionally retaining learned
+long-term strategy data. Raw protocol events and the append-only communication audit remain external
+for exact research replay.
 
 ## Setup
 

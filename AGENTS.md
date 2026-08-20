@@ -8,6 +8,7 @@
 - `src/llm_negotiation/policies.py`: deterministic non-LLM policies and agent-visible observations.
 - `src/llm_negotiation/benchmark.py`: protocol-backed deterministic policy comparison runner.
 - `src/llm_negotiation/communication.py`: typed message routing, audit replay, and formatting.
+- `src/llm_negotiation/memory.py`: participant-owned long-term, working, and episodic memory.
 - `tests/`: pytest unit and CLI smoke tests.
 - `pyproject.toml`: packaging, dependencies, console script, and pytest configuration.
 
@@ -31,6 +32,7 @@ Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and ru
 - Preserve deterministic negotiation behavior unless a change explicitly requires otherwise.
 - Keep private participant preferences out of public scenarios, offers, actions, and presentation output.
 - Keep protocol transitions deterministic, immutable, and independent of agent implementations.
+- Pass bounded participant-specific memory snapshots to policies; keep raw audit trails external.
 - Validate public inputs and add focused tests for behavioral changes.
 - Keep runtime dependencies minimal and separate optional/development dependencies.
 - Do not add LLM calls, databases, or web APIs unless a task explicitly requests them.

@@ -17,6 +17,7 @@ from .domain.errors import (
 from .domain.identifiers import ActionId, AgreementId, CorrelationId, OfferId, ParticipantId
 from .domain.models import (
     AcceptAction,
+    ActionType,
     Agreement,
     CounterAction,
     DomainModel,
@@ -66,6 +67,35 @@ TERMINAL_PHASES = frozenset(
         ProtocolPhase.EXPIRED,
     }
 )
+
+
+def legal_action_types_for(
+    state: NegotiationSession,
+    actor_id: ParticipantId,
+) -> Tuple[ActionType, ...]:
+    """Derive legal action kinds from public protocol state without mutating it."""
+
+    if actor_id not in state.participants:
+        raise IllegalActorError(f"participant '{actor_id}' is not in the session")
+    if state.phase in TERMINAL_PHASES:
+        return ()
+    legal = [ActionType.WITHDRAW]
+    if state.phase is ProtocolPhase.CREATED:
+        if actor_id == state.current_turn:
+            legal.insert(0, ActionType.PROPOSE)
+        return tuple(legal)
+    if state.phase in {ProtocolPhase.ACTIVE, ProtocolPhase.MEDIATION}:
+        legal.insert(0, ActionType.MESSAGE)
+        if state.phase is ProtocolPhase.ACTIVE:
+            legal.insert(1, ActionType.REQUEST_MEDIATION)
+        if actor_id == state.current_turn:
+            offer_actions = (
+                (ActionType.COUNTER, ActionType.ACCEPT, ActionType.REJECT)
+                if state.latest_valid_offer is not None
+                else (ActionType.PROPOSE,)
+            )
+            legal = list(offer_actions) + legal
+    return tuple(legal)
 
 
 def _list_to_tuple(value: Any) -> Any:
@@ -272,6 +302,17 @@ class NegotiationProtocol:
         updates["event_sequence"] = state.event_sequence + (event,)
         new_state = _replace_session(state, updates)
         return TransitionResult(state=new_state, events=(event,))
+
+    def legal_action_types(
+        self,
+        state: NegotiationSession,
+        actor_id: ParticipantId,
+    ) -> Tuple[ActionType, ...]:
+        """Return action kinds legal for an actor without changing protocol state."""
+
+        self._validate_state_belongs_to_protocol(state)
+        self.scenario.participant(actor_id)
+        return legal_action_types_for(state, actor_id)
 
     def _validate_state_belongs_to_protocol(self, state: NegotiationSession) -> None:
         if state.scenario_id != self.scenario.scenario_id:

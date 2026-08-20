@@ -7,6 +7,7 @@ __all__ = [
     "policies",
     "benchmark",
     "communication",
+    "memory",
     "manager",
     "judge",
     "learning",

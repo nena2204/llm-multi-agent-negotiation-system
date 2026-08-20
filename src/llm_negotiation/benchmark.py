@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from typing import Mapping, Tuple
 
 from .domain import CounterAction, NegotiationScenario, Offer, ParticipantId, ProposeAction
-from .policies import AgentObservation, AgentProfile, NegotiationPolicy
+from .memory import AgentMemory, AgentObservation
+from .policies import AgentProfile, NegotiationPolicy
 from .protocol import NegotiationProtocol, NegotiationSession, TERMINAL_PHASES
 
 
@@ -34,6 +35,14 @@ def run_policy_session(
         initial_turn=participant_ids[0],
     )
     state = protocol.create_session()
+    memories = {
+        participant_id: AgentMemory(
+            profiles[participant_id],
+            scenario,
+            strategy_guidance=(f"Use the {policies[participant_id].name} policy.",),
+        )
+        for participant_id in participant_ids
+    }
     offers = []
     while state.phase not in TERMINAL_PHASES:
         participant_id = state.current_turn
@@ -42,7 +51,12 @@ def run_policy_session(
             session=state,
             own_profile=profiles[participant_id],
         )
-        action = policies[participant_id].choose_action(observation)
+        memory = memories[participant_id].update(
+            observation,
+            legal_actions=protocol.legal_action_types(state, participant_id),
+            active_plan=(f"Choose the next {policies[participant_id].name} policy action.",),
+        )
+        action = policies[participant_id].choose_action(memory)
         result = protocol.transition(state, action)
         state = result.state
         if isinstance(action, (ProposeAction, CounterAction)):
