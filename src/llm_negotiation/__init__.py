@@ -2,6 +2,7 @@
 
 __all__ = [
     "agents",
+    "domain",
     "manager",
     "judge",
     "learning",

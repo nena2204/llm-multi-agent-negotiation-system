@@ -1,5 +1,2 @@
-streamlit
-openai
-python-dotenv
-matplotlib
-pandas
+# Runtime dependencies. Development/test dependencies live in pyproject.toml's `dev` extra.
+pydantic>=2.7,<3

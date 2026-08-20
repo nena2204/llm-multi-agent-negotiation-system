@@ -1,10 +1,11 @@
 import argparse
 from llm_negotiation.agents import BuyerAgent, SellerAgent
+from llm_negotiation.domain import price_only_from_legacy, price_only_to_legacy
 from llm_negotiation.manager import NegotiationManager
 from llm_negotiation.utils import format_history
 
 
-def parse_args():
+def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Run a negotiation simulation")
     p.add_argument("--product", default="Widget", help="Product name")
     p.add_argument("--seller_initial", type=float, default=150.0, help="Seller initial price")
@@ -14,16 +15,18 @@ def parse_args():
     p.add_argument("--rounds", type=int, default=6, help="Number of negotiation rounds")
     p.add_argument("--buyer_strategy", choices=["aggressive","neutral","cooperative"], default="neutral")
     p.add_argument("--seller_strategy", choices=["aggressive","neutral","cooperative"], default="neutral")
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
-def main():
-    args = parse_args()
+def main(argv=None):
+    args = parse_args(argv)
 
     buyer = BuyerAgent(name="Buyer", role="buyer", strategy=args.buyer_strategy, max_price=args.buyer_max, current_offer=args.buyer_initial)
     seller = SellerAgent(name="Seller", role="seller", strategy=args.seller_strategy, initial_price=args.seller_initial, min_acceptable=args.seller_min)
+    price_domain = price_only_from_legacy(args.product, buyer, seller, args.rounds)
+    buyer, seller, rounds = price_only_to_legacy(price_domain)
 
-    manager = NegotiationManager(product_name=args.product, buyer=buyer, seller=seller, rounds=args.rounds)
+    manager = NegotiationManager(product_name=args.product, buyer=buyer, seller=seller, rounds=rounds)
     result = manager.run()
 
     print("--- Negotiation History ---")

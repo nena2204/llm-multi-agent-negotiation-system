@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from .agents import BuyerAgent, SellerAgent, MediatorAgent
 from .judge import Judge
 from .learning import LearningAgent
@@ -6,6 +6,8 @@ from .learning import LearningAgent
 
 class NegotiationManager:
     def __init__(self, product_name: str, buyer: BuyerAgent, seller: SellerAgent, rounds: int = 6):
+        if not isinstance(rounds, int) or isinstance(rounds, bool) or rounds <= 0:
+            raise ValueError("rounds must be a positive integer")
         self.product_name = product_name
         self.buyer = buyer
         self.seller = seller
@@ -19,13 +21,27 @@ class NegotiationManager:
     def _record(self, message: str):
         self.history.append(message)
 
+    def _reset(self) -> None:
+        self.buyer.current_offer = self.buyer.initial_offer
+        self.seller.current_offer = self.seller.initial_price
+        self.buyer.history.clear()
+        self.seller.history.clear()
+        self.mediator.history.clear()
+        self.history = []
+        self.deal_reached = False
+        self.final_price = None
+        self.mediator_suggestion = None
+
     def run(self) -> Dict[str, Any]:
+        self._reset()
         # initial proposals
         self._record(self.seller.propose_initial())
         self._record(self.buyer.propose_initial())
 
-        for r in range(1, self.rounds + 1):
-            remaining = self.rounds - r + 1
+        rounds_used = 0
+        for round_number in range(1, self.rounds + 1):
+            rounds_used = round_number
+            remaining = self.rounds - round_number + 1
             # Seller gives a price -> Buyer counters
             seller_msg = self.seller.counter_offer(self.buyer.current_offer, remaining)
             self._record(seller_msg)
@@ -59,7 +75,7 @@ class NegotiationManager:
             final_price=self.final_price,
             buyer=self.buyer,
             seller=self.seller,
-            rounds_used=min(self.rounds, len(self.history)),
+            rounds_used=rounds_used,
         )
 
         # learning agent (optional) - we can return score per strategies
@@ -78,19 +94,13 @@ class NegotiationManager:
         return result
 
     def run_many(self, simulations: int = 10) -> Dict[str, Any]:
-        # run multiple simulations (resetting states) to compare strategies
+        if not isinstance(simulations, int) or isinstance(simulations, bool) or simulations <= 0:
+            raise ValueError("simulations must be a positive integer")
+
+        # run multiple simulations to compare strategies
         strategy_rewards: Dict[str, float] = {}
         details: List[Dict] = []
-        for i in range(simulations):
-            # clone simple state by copying values
-            # Reset agents to their initial starting offers
-            self.seller.current_offer = float(self.seller.initial_price)
-            self.buyer.current_offer = float(self.buyer.current_offer)
-            self.history = []
-            self.deal_reached = False
-            self.final_price = None
-            self.mediator_suggestion = None
-
+        for _ in range(simulations):
             res = self.run()
             details.append(res)
             # aggregate reward per strategy pair

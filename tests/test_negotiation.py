@@ -1,15 +1,87 @@
+import math
+
+import pytest
+
 from llm_negotiation.agents import BuyerAgent, SellerAgent
 from llm_negotiation.manager import NegotiationManager
 
 
-def test_simple_deal_reached():
-    buyer = BuyerAgent(name="Buyer", role="buyer", strategy="cooperative", max_price=120.0, current_offer=20.0)
-    seller = SellerAgent(name="Seller", role="seller", strategy="cooperative", initial_price=100.0, min_acceptable=80.0)
-    manager = NegotiationManager(product_name="Test", buyer=buyer, seller=seller, rounds=5)
-    res = manager.run()
-    # cooperative agents should reach a deal
-    assert isinstance(res, dict)
-    assert "history" in res
-    # Either deal reached or mediator suggested; for these params cooperative should reach
-    assert res["deal_reached"] or res["mediator_suggestion"] is not None
+def make_manager(
+    *,
+    buyer_initial=100.0,
+    buyer_max=120.0,
+    seller_initial=100.0,
+    seller_min=80.0,
+    rounds=5,
+    strategy="cooperative",
+):
+    buyer = BuyerAgent(
+        name="Buyer",
+        role="buyer",
+        strategy=strategy,
+        max_price=buyer_max,
+        current_offer=buyer_initial,
+    )
+    seller = SellerAgent(
+        name="Seller",
+        role="seller",
+        strategy=strategy,
+        initial_price=seller_initial,
+        min_acceptable=seller_min,
+    )
+    return NegotiationManager(product_name="Test", buyer=buyer, seller=seller, rounds=rounds)
+
+
+def test_deal_is_reached_and_rounds_are_counted():
+    result = make_manager().run()
+
+    assert result["deal_reached"] is True
+    assert result["final_price"] == 100.0
+    assert result["mediator_suggestion"] is None
+    assert result["evaluation"]["rounds_used"] == 1
+
+
+def test_failed_negotiation_invokes_mediator():
+    result = make_manager(
+        buyer_initial=10,
+        buyer_max=40,
+        seller_initial=100,
+        seller_min=80,
+        rounds=2,
+        strategy="aggressive",
+    ).run()
+
+    assert result["deal_reached"] is False
+    assert result["final_price"] is None
+    assert result["mediator_suggestion"] == 60.0
+    assert result["evaluation"]["rounds_used"] == 2
+    assert result["history"][-1] == "Mediator (mediator): I suggest a compromise price of $60.00."
+
+
+@pytest.mark.parametrize(
+    ("factory", "message"),
+    [
+        (lambda: make_manager(rounds=0), "rounds must be a positive integer"),
+        (lambda: make_manager(buyer_initial=121), "buyer initial offer must not exceed"),
+        (lambda: make_manager(seller_initial=50, seller_min=51), "seller minimum acceptable price must not exceed"),
+        (lambda: make_manager(buyer_initial=-1), "finite non-negative"),
+        (lambda: make_manager(buyer_max=math.inf), "finite non-negative"),
+        (lambda: make_manager(seller_initial=math.nan), "finite non-negative"),
+    ],
+)
+def test_invalid_configuration_is_rejected(factory, message):
+    with pytest.raises(ValueError, match=message):
+        factory()
+
+
+def test_repeated_runs_are_deterministic_and_reset_state():
+    manager = make_manager()
+
+    first = manager.run()
+    second = manager.run()
+    many = manager.run_many(simulations=3)
+
+    assert second == first
+    assert all(result == first for result in many["details"])
+    assert many["aggregate_rewards"] == {"buyer=cooperative|seller=cooperative": first["reward"] * 3}
 
