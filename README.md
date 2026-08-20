@@ -1,7 +1,8 @@
 # LLM-Based Multi-Agent Negotiation System
 
 This project is a deterministic, rule-based simulation of negotiation between buyer, seller,
-mediator, judge, and learning roles. It does not currently call an LLM or an external API.
+mediator, judge, and learning roles. It includes an optional provider-independent LLM boundary, but
+no negotiation policy calls an LLM yet and the default test suite never accesses the network.
 
 ## Features
 
@@ -11,6 +12,7 @@ mediator, judge, and learning roles. It does not currently call an LLM or an ext
 - Deterministic rewards and repeated simulations
 - Reproducible non-LLM baseline policies for multi-issue experiments
 - Command-line interface and optional Streamlit UI
+- Typed LLM client contract with deterministic fake and optional OpenAI Responses API adapter
 
 ## Domain model
 
@@ -106,6 +108,63 @@ resumed without re-ingesting old events or messages.
 Starting a new negotiation clears working and episodic memory while optionally retaining learned
 long-term strategy data. Raw protocol events and the append-only communication audit remain external
 for exact research replay.
+
+## Provider-independent LLM boundary
+
+`llm_negotiation.llm` defines immutable request, response, usage, error, retry, and model
+configuration types plus the `LLMClient` protocol. Model selection, timeout, and retry settings live
+in `ModelConfiguration`; they are deliberately separate from agent strategy, persona, memory, and
+private preferences.
+
+`FakeLLMClient` supports queued results and deterministic request rules. It is the default testing
+client and does not retain request content unless a test explicitly enables `record_requests`.
+`OpenAILLMClient` is an optional adapter using the current Responses API. The OpenAI SDK is lazily
+imported, SDK-level retries are disabled, and the gateway applies the configured bounded exponential
+backoff. Provider exception bodies and prompts are not logged. The adapter sends `store=False` and
+returns the same `LLMResponse` application type as the fake.
+
+Install the optional provider only when needed:
+
+```powershell
+python -m pip install -e ".[openai]"
+```
+
+If a local environment file matches your development workflow, create the ignored template copy
+with `Copy-Item .env.example .env`, then populate it through a trusted editor or secret manager and
+configure your shell or IDE to export those variables. This project does not load dotenv files
+automatically. Never commit the populated file and never paste a credential into source, tests,
+documentation, command history, or logs.
+
+The supported variables are:
+
+- `OPENAI_API_KEY` (required to construct the real adapter)
+- `OPENAI_MODEL` (required by `load_openai_model_configuration()`)
+- `OPENAI_TIMEOUT_SECONDS`
+- `OPENAI_MAX_OUTPUT_TOKENS`
+- `OPENAI_MAX_RETRIES`
+- `OPENAI_RETRY_INITIAL_BACKOFF_SECONDS`
+- `OPENAI_RETRY_BACKOFF_MULTIPLIER`
+- `OPENAI_RETRY_MAX_BACKOFF_SECONDS`
+- `RUN_LIVE_LLM_TESTS` (test-only opt-in; leave unset for normal offline verification)
+
+Missing credentials and model selection raise actionable `LLMConfigurationError` exceptions before
+any request. The ordinary suite uses mock SDK objects and has an automatic network guard:
+
+```powershell
+pytest -q
+pytest -q -m "not live_api"
+```
+
+The real-provider contract test is intentionally opt-in. Only after installing `.[openai]` and
+supplying the required variables from a secure environment, enable it with:
+
+```powershell
+$env:RUN_LIVE_LLM_TESTS = "1"
+pytest -q -m live_api
+```
+
+If the flag is absent, the live module is skipped before a client is constructed. No live API call
+is part of normal installation or verification.
 
 ## Setup
 

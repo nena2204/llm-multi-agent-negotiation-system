@@ -8,6 +8,7 @@ __all__ = [
     "benchmark",
     "communication",
     "memory",
+    "llm",
     "manager",
     "judge",
     "learning",

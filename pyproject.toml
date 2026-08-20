@@ -12,6 +12,7 @@ dependencies = ["pydantic>=2.7,<3"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+openai = ["openai>=1.68,<3"]
 ui = ["streamlit>=1.30,<2"]
 
 [project.scripts]
@@ -23,3 +24,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+markers = [
+    "live_api: opt-in tests that may call a configured external LLM provider",
+]

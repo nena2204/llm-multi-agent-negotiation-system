@@ -6,6 +6,8 @@ __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
 .env
+.env.*
+!.env.example
 .DS_Store
 .idea/
 .vscode/
