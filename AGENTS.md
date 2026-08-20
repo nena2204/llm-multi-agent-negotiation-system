@@ -5,6 +5,8 @@
 - `src/llm_negotiation/`: the single Python package implementation.
 - `src/llm_negotiation/domain/`: typed public negotiation models, private preferences, and adapters.
 - `src/llm_negotiation/protocol.py`: deterministic protocol state machine and replayable events.
+- `src/llm_negotiation/policies.py`: deterministic non-LLM policies and agent-visible observations.
+- `src/llm_negotiation/benchmark.py`: protocol-backed deterministic policy comparison runner.
 - `tests/`: pytest unit and CLI smoke tests.
 - `pyproject.toml`: packaging, dependencies, console script, and pytest configuration.
 

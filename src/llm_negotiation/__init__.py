@@ -4,6 +4,8 @@ __all__ = [
     "agents",
     "domain",
     "protocol",
+    "policies",
+    "benchmark",
     "manager",
     "judge",
     "learning",
