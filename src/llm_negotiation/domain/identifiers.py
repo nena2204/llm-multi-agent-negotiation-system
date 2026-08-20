@@ -58,3 +58,18 @@ class OfferId(_Identifier):
 @dataclass(frozen=True, order=True)
 class AgreementId(_Identifier):
     """Stable identifier for an agreement."""
+
+
+@dataclass(frozen=True, order=True)
+class ActionId(_Identifier):
+    """Stable identifier for a recorded protocol action."""
+
+
+@dataclass(frozen=True, order=True)
+class MessageId(_Identifier):
+    """Stable identifier for a communication envelope."""
+
+
+@dataclass(frozen=True, order=True)
+class CorrelationId(_Identifier):
+    """Identifier linking protocol events and related messages."""

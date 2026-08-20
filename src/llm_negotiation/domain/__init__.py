@@ -10,6 +10,10 @@ from .errors import (
     InvalidWeightsError,
     IssueValueError,
     MalformedActionError,
+    CommunicationError,
+    MessageAccessError,
+    MessageReplayError,
+    MessageRoutingError,
     OfferValidationError,
     OutcomeValidationError,
     ProtocolError,
@@ -21,7 +25,15 @@ from .errors import (
     UnknownIssueError,
     UnknownParticipantError,
 )
-from .identifiers import AgreementId, IssueId, OfferId, ParticipantId
+from .identifiers import (
+    ActionId,
+    AgreementId,
+    CorrelationId,
+    IssueId,
+    MessageId,
+    OfferId,
+    ParticipantId,
+)
 from .legacy import PriceOnlyMigration, price_only_from_legacy, price_only_to_legacy
 from .models import (
     WEIGHT_SUM_TOLERANCE,
@@ -59,10 +71,13 @@ from .models import (
 __all__ = [
     "WEIGHT_SUM_TOLERANCE",
     "AcceptAction",
+    "ActionId",
     "ActionType",
     "Agreement",
     "AgreementId",
     "CategoryUtility",
+    "CommunicationError",
+    "CorrelationId",
     "CategoricalIssue",
     "CategoricalIssueValue",
     "CategoricalPreference",
@@ -78,6 +93,10 @@ __all__ = [
     "IssueKind",
     "IssueValueError",
     "MalformedActionError",
+    "MessageAccessError",
+    "MessageId",
+    "MessageReplayError",
+    "MessageRoutingError",
     "MessageAction",
     "NegotiationAction",
     "NegotiationScenario",

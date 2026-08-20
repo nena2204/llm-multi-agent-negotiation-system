@@ -64,6 +64,26 @@ CLI remains available during migration.
 comparisons through the authoritative protocol. Its trajectories and outcomes are baselines for
 experiments, not evidence that any strategy is universally best.
 
+## Typed communication
+
+`llm_negotiation.communication` provides immutable `MessageEnvelope` records and an in-memory,
+append-only `MessageBus`. Envelopes use a fixed message-type enum, typed participant and reference
+identifiers, timezone-aware timestamps, deterministic sequence numbers, and correlation identifiers.
+They cannot contain arbitrary metadata or domain objects.
+
+The bus supports four visibility routes:
+
+- `public`: delivered to every participant and included in the public transcript.
+- `direct_private`: readable only by its sender, explicit recipients, and authorized auditors.
+- `mediator_only`: routed only to configured mediators, with sender and audit access retained.
+- `system_audit`: emitted only by the system and visible only to authorized audit readers.
+
+An agent inbox combines its public and addressed messages; it never includes another agent's private
+traffic. Audit access must be explicitly configured. Protocol events and related messages can share
+a correlation identifier, and `EpisodeRecord` preserves both ordered streams for deterministic
+serialization and replay. Sending persuasive content or a `mediation_request` message does not
+execute a protocol action, accept an offer, withdraw, or enter mediation.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install

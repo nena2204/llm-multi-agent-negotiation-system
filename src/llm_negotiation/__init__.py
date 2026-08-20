@@ -6,6 +6,7 @@ __all__ = [
     "protocol",
     "policies",
     "benchmark",
+    "communication",
     "manager",
     "judge",
     "learning",

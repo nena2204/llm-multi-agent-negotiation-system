@@ -14,7 +14,7 @@ from .domain.errors import (
     RoundMismatchError,
     StaleOfferError,
 )
-from .domain.identifiers import AgreementId, OfferId, ParticipantId
+from .domain.identifiers import ActionId, AgreementId, CorrelationId, OfferId, ParticipantId
 from .domain.models import (
     AcceptAction,
     Agreement,
@@ -75,6 +75,8 @@ def _list_to_tuple(value: Any) -> Any:
 class ActionAppliedEvent(DomainModel):
     event_type: Literal[ProtocolEventType.ACTION_APPLIED] = ProtocolEventType.ACTION_APPLIED
     sequence_number: int = Field(ge=1)
+    action_id: ActionId
+    correlation_id: CorrelationId
     action: NegotiationAction
     phase_before: ProtocolPhase
     phase_after: ProtocolPhase
@@ -85,6 +87,7 @@ class ActionAppliedEvent(DomainModel):
 class SystemTerminatedEvent(DomainModel):
     event_type: Literal[ProtocolEventType.SYSTEM_TERMINATED] = ProtocolEventType.SYSTEM_TERMINATED
     sequence_number: int = Field(ge=1)
+    correlation_id: CorrelationId
     reason: SystemTerminationReason
     phase_before: ProtocolPhase
     phase_after: ProtocolPhase
@@ -224,6 +227,7 @@ class NegotiationProtocol:
         )
         event = SystemTerminatedEvent(
             sequence_number=1,
+            correlation_id=CorrelationId("correlation-system-1"),
             reason=SystemTerminationReason.IMPOSSIBLE_FEASIBLE_REGION,
             phase_before=ProtocolPhase.CREATED,
             phase_after=ProtocolPhase.FAILED,
@@ -254,8 +258,11 @@ class NegotiationProtocol:
         updates = self._apply_action(state, action)
         phase_after = updates.get("phase", state.phase)
         round_after = updates.get("round_number", state.round_number)
+        sequence_number = len(state.event_sequence) + 1
         event = ActionAppliedEvent(
-            sequence_number=len(state.event_sequence) + 1,
+            sequence_number=sequence_number,
+            action_id=ActionId(f"action-{sequence_number}"),
+            correlation_id=CorrelationId(f"correlation-action-{sequence_number}"),
             action=action,
             phase_before=phase_before,
             phase_after=phase_after,

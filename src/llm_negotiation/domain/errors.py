@@ -72,3 +72,19 @@ class RoundMismatchError(ProtocolError):
 
 class ReplayError(ProtocolError):
     """Raised when recorded events cannot be replayed deterministically."""
+
+
+class CommunicationError(DomainError):
+    """Base error for typed message validation, routing, and access failures."""
+
+
+class MessageRoutingError(CommunicationError):
+    """Raised when an envelope cannot legally be routed by a message bus."""
+
+
+class MessageAccessError(CommunicationError):
+    """Raised when a viewer attempts to read a message outside its visibility."""
+
+
+class MessageReplayError(CommunicationError):
+    """Raised when an audit sequence cannot be replayed deterministically."""
