@@ -1,8 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Tuple
 
 from .domain import CounterAction, NegotiationScenario, Offer, ParticipantId, ProposeAction
-from .memory import AgentMemory, AgentObservation
+from .memory import AgentMemory, AgentObservation, MemorySnapshot
 from .policies import AgentProfile, NegotiationPolicy
 from .protocol import NegotiationProtocol, NegotiationSession, TERMINAL_PHASES
 
@@ -11,6 +11,7 @@ from .protocol import NegotiationProtocol, NegotiationSession, TERMINAL_PHASES
 class BenchmarkResult:
     session: NegotiationSession
     offer_trajectory: Tuple[Offer, ...]
+    memory_snapshots: Mapping[ParticipantId, MemorySnapshot] = field(default_factory=dict)
 
 
 def run_policy_session(
@@ -57,8 +58,18 @@ def run_policy_session(
             active_plan=(f"Choose the next {policies[participant_id].name} policy action.",),
         )
         action = policies[participant_id].choose_action(memory)
+        for belief in getattr(policies[participant_id], "last_belief_states", ()):
+            memories[participant_id].record_belief_snapshot(belief)
         result = protocol.transition(state, action)
         state = result.state
         if isinstance(action, (ProposeAction, CounterAction)):
             offers.append(action.offer)
-    return BenchmarkResult(session=state, offer_trajectory=tuple(offers))
+    return BenchmarkResult(
+        session=state,
+        offer_trajectory=tuple(offers),
+        memory_snapshots={
+            key: value.snapshot()
+            for key, value in memories.items()
+            if value.working is not None
+        },
+    )

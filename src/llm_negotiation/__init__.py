@@ -11,6 +11,8 @@ __all__ = [
     "llm",
     "llm_policy",
     "llm_prompts",
+    "beliefs",
+    "opponent",
     "manager",
     "judge",
     "learning",

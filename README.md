@@ -194,6 +194,28 @@ withdraws when withdrawal is legal. Per-stage call attempts, latency, token usag
 and concise audit artifacts are exposed through `last_trace` and `cumulative_telemetry` without
 retaining prompts.
 
+## Opponent modelling
+
+`llm_negotiation.opponent` treats Theory of Mind as an explicit optional component. An
+`OpponentBeliefState` keeps observable facts separate from uncertain goal, reservation-range,
+strategy, next-action, and information-need hypotheses. Every snapshot records its confidence,
+supporting observable event identifiers, unknowns, and last update round. It never contains an
+opponent's private preference object.
+
+`OpponentModelConfiguration` supports `disabled`, deterministic `heuristic`, and optional `llm`
+modes. The heuristic baseline updates numeric issue directions with deterministic Bayesian-style
+likelihoods, tracks legal public bounds, observes categorical choices, and classifies concession
+trajectories. The LLM modeller uses the provider-independent gateway and a strict versioned JSON
+schema; invalid or out-of-bounds output falls back to the heuristic baseline. Planning receives
+beliefs explicitly as defeasible inferences and may ignore them below the configured confidence
+threshold.
+
+Policy-produced beliefs are stored as typed episodic-memory events. Simulation ground truth is
+accepted only by the separate post-episode `calibrate_belief` evaluator, which requires a matching
+terminal `NegotiationSession` and reports reservation
+interval coverage/width, probability assigned to the actual strategy, goal Brier score, and
+confidence error. Ground truth is never passed to either modeller or the policy decision path.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install

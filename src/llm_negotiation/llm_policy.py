@@ -9,6 +9,11 @@ from typing import Annotated, Any, Callable, Dict, Literal, Mapping, Optional, T
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator
 
+from .beliefs import (
+    OpponentBeliefState,
+    OpponentModelConfiguration,
+    OpponentModelMode,
+)
 from .domain import (
     AcceptAction,
     ActionType,
@@ -40,6 +45,7 @@ from .llm import (
 from .llm_prompts import PROMPT_VERSION, repair_messages, stage_messages
 from .memory import (
     ActionMemoryEvent,
+    BeliefSnapshotMemoryEvent,
     MemorySnapshot,
     ObservationMemoryEvent,
     OutcomeMemoryEvent,
@@ -49,6 +55,11 @@ from .memory import (
     VisibleMessage,
 )
 from .policies import LinearConcessionPolicy, NegotiationPolicy, PolicyError
+from .opponent import (
+    HeuristicOpponentModeller,
+    OpponentModeller,
+    evidence_from_memory,
+)
 from .protocol import ProtocolPhase, TERMINAL_PHASES
 
 
@@ -165,6 +176,7 @@ class LLMDecisionTrace(PolicyModel):
     participant_id: ParticipantId
     objective: Optional[ObjectiveConstraints] = None
     opponent_hypothesis: Optional[OpponentHypothesis] = None
+    opponent_beliefs: Tuple[OpponentBeliefState, ...] = ()
     plan: Optional[NegotiationPlan] = None
     decision_rationale: Optional[str] = Field(default=None, max_length=RATIONALE_LIMIT)
     evidence: Tuple[str, ...] = ()
@@ -269,6 +281,11 @@ def _episodic_fact(event: object) -> str:
         return f"Visible message from {event.message.sender}: {event.message.content}"
     if isinstance(event, OutcomeMemoryEvent):
         return f"Outcome: {event.outcome.status.value}."
+    if isinstance(event, BeliefSnapshotMemoryEvent):
+        return (
+            f"Opponent belief snapshot for {event.belief.opponent_id} with "
+            f"confidence {event.belief.confidence:.2f}."
+        )
     if isinstance(event, SummaryMemoryEvent):
         return event.content
     raise LLMPolicyError("unsupported participant memory event")
@@ -285,17 +302,30 @@ class LLMNegotiationPolicy:
         model_configuration: ModelConfiguration,
         *,
         fallback_policy: Optional[NegotiationPolicy] = None,
+        opponent_configuration: Optional[OpponentModelConfiguration] = None,
+        opponent_modeller: Optional[OpponentModeller] = None,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         self.client = client
         self.model_configuration = model_configuration
         self.fallback_policy = fallback_policy or LinearConcessionPolicy()
+        self.opponent_configuration = opponent_configuration or OpponentModelConfiguration()
+        if (
+            self.opponent_configuration.mode is OpponentModelMode.LLM
+            and opponent_modeller is None
+        ):
+            raise ValueError("LLM opponent modelling mode requires an explicit LLM modeller")
+        self.opponent_modeller = opponent_modeller or HeuristicOpponentModeller()
         self._clock = clock
         self._hypotheses: Dict[Tuple[str, ParticipantId], OpponentHypothesis] = {}
+        self._beliefs: Dict[
+            Tuple[str, ParticipantId, ParticipantId], OpponentBeliefState
+        ] = {}
         self._cumulative: Dict[CognitiveStage, _MutableTelemetry] = {
             stage: _MutableTelemetry() for stage in CognitiveStage
         }
         self.last_trace: Optional[LLMDecisionTrace] = None
+        self.last_belief_states: Tuple[OpponentBeliefState, ...] = ()
 
     @property
     def cumulative_telemetry(self) -> Tuple[CognitiveStageTelemetry, ...]:
@@ -334,6 +364,7 @@ class LLMNegotiationPolicy:
         )
 
     def choose_action(self, memory: MemorySnapshot) -> NegotiationAction:
+        self.last_belief_states = ()
         telemetry = {stage: _MutableTelemetry() for stage in CognitiveStage}
         recovery = _RecoveryBudget()
         objective: Optional[ObjectiveConstraints] = None
@@ -345,10 +376,14 @@ class LLMNegotiationPolicy:
             observation = self.build_agent_visible_observation(memory)
             telemetry[CognitiveStage.OBSERVATION].succeeded = True
             objective = self.summarize_objective(observation, telemetry, recovery)
-            hypothesis = self.form_opponent_hypothesis(observation, objective, telemetry, recovery)
+            beliefs = self.update_opponent_beliefs(memory)
+            self.last_belief_states = beliefs
+            hypothesis = self.form_opponent_hypothesis(
+                observation, objective, beliefs, telemetry, recovery
+            )
             self._hypotheses[(observation.negotiation_id, observation.participant_id)] = hypothesis
             plan = self.choose_negotiation_plan(
-                observation, objective, hypothesis, telemetry, recovery
+                observation, objective, hypothesis, beliefs, telemetry, recovery
             )
             decision, raw_response = self.generate_structured_action(
                 observation, objective, hypothesis, plan, telemetry, recovery
@@ -400,6 +435,7 @@ class LLMNegotiationPolicy:
                 hypothesis,
                 plan,
                 decision,
+                beliefs=self.last_belief_states,
                 used_fallback=True,
                 fallback_reason=failure.code,
             )
@@ -413,6 +449,7 @@ class LLMNegotiationPolicy:
             hypothesis,
             plan,
             decision,
+            beliefs=self.last_belief_states,
             used_fallback=False,
             fallback_reason=None,
         )
@@ -437,6 +474,7 @@ class LLMNegotiationPolicy:
         self,
         observation: AgentVisibleObservation,
         objective: ObjectiveConstraints,
+        beliefs: Tuple[OpponentBeliefState, ...],
         telemetry: Dict[CognitiveStage, _MutableTelemetry],
         recovery: _RecoveryBudget,
     ) -> OpponentHypothesis:
@@ -449,6 +487,9 @@ class LLMNegotiationPolicy:
             {
                 "observation": observation.model_dump(mode="json"),
                 "objective": objective.model_dump(mode="json"),
+                "opponent_beliefs": tuple(
+                    belief.model_dump(mode="json") for belief in beliefs
+                ),
                 "previous_hypothesis": (
                     previous.model_dump(mode="json") if previous is not None else None
                 ),
@@ -466,6 +507,7 @@ class LLMNegotiationPolicy:
         observation: AgentVisibleObservation,
         objective: ObjectiveConstraints,
         hypothesis: OpponentHypothesis,
+        beliefs: Tuple[OpponentBeliefState, ...],
         telemetry: Dict[CognitiveStage, _MutableTelemetry],
         recovery: _RecoveryBudget,
     ) -> NegotiationPlan:
@@ -476,11 +518,39 @@ class LLMNegotiationPolicy:
                 "observation": observation.model_dump(mode="json"),
                 "objective": objective.model_dump(mode="json"),
                 "opponent_hypothesis": hypothesis.model_dump(mode="json"),
+                "opponent_beliefs": tuple(
+                    belief.model_dump(mode="json") for belief in beliefs
+                ),
+                "belief_guidance": (
+                    "Beliefs are uncertain inferences, not facts. Reject or ignore any inference "
+                    f"below confidence {self.opponent_configuration.minimum_planning_confidence}."
+                ),
             },
             telemetry,
             recovery,
         )
         return result
+
+    def update_opponent_beliefs(
+        self, memory: MemorySnapshot
+    ) -> Tuple[OpponentBeliefState, ...]:
+        if self.opponent_configuration.mode is OpponentModelMode.DISABLED:
+            return ()
+        beliefs = []
+        for participant in memory.long_term.public_participants:
+            opponent_id = participant.participant_id
+            if opponent_id == memory.owner_id:
+                continue
+            evidence = evidence_from_memory(memory, opponent_id)
+            previous = self._beliefs.get(
+                (memory.working.negotiation_id, memory.owner_id, opponent_id)
+            )
+            belief = self.opponent_modeller.update(previous, evidence)
+            self._beliefs[
+                (memory.working.negotiation_id, memory.owner_id, opponent_id)
+            ] = belief
+            beliefs.append(belief)
+        return tuple(beliefs)
 
     def generate_structured_action(
         self,
@@ -730,6 +800,7 @@ class LLMNegotiationPolicy:
         hypothesis: Optional[OpponentHypothesis],
         plan: Optional[NegotiationPlan],
         decision: Optional[StructuredActionDecision],
+        beliefs: Tuple[OpponentBeliefState, ...],
         *,
         used_fallback: bool,
         fallback_reason: Optional[str],
@@ -740,6 +811,7 @@ class LLMNegotiationPolicy:
             participant_id=memory.owner_id,
             objective=objective,
             opponent_hypothesis=hypothesis,
+            opponent_beliefs=beliefs,
             plan=plan,
             decision_rationale=(decision.decision_rationale if decision is not None else None),
             evidence=(decision.evidence if decision is not None else ()),

@@ -7,6 +7,7 @@ from typing import Annotated, Any, ClassVar, Literal, Optional, Protocol, Tuple,
 
 from pydantic import Field, ValidationError, field_validator, model_validator
 
+from .beliefs import OpponentBeliefState
 from .communication import MessageEnvelope, MessageType, MessageVisibility
 from .domain import (
     ActionType,
@@ -283,6 +284,7 @@ class ObservationMemoryEvent(DomainModel):
     current_turn: Optional[ParticipantId]
     outstanding_offer_id: Optional[OfferId] = None
     observed_action: Optional[NegotiationAction] = None
+    source_event_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
     fact: str = Field(min_length=1, max_length=500)
 
 
@@ -302,6 +304,12 @@ class OutcomeMemoryEvent(DomainModel):
     event_type: Literal["outcome"] = "outcome"
     sequence_number: int = Field(ge=1)
     outcome: TerminalOutcome
+
+
+class BeliefSnapshotMemoryEvent(DomainModel):
+    event_type: Literal["opponent_belief"] = "opponent_belief"
+    sequence_number: int = Field(ge=1)
+    belief: OpponentBeliefState
 
 
 class SummaryMemoryEvent(DomainModel):
@@ -327,6 +335,7 @@ MemoryEvent = Annotated[
         ActionMemoryEvent,
         ReceivedMessageMemoryEvent,
         OutcomeMemoryEvent,
+        BeliefSnapshotMemoryEvent,
         SummaryMemoryEvent,
     ],
     Field(discriminator="event_type"),
@@ -376,6 +385,15 @@ class MemorySnapshot(DomainModel):
         if len(negotiation_ids) != 1:
             raise ValueError("all memory layers must belong to one negotiation")
         scenario = self.long_term.scenario()
+        for event in self.episodic.events:
+            if isinstance(event, BeliefSnapshotMemoryEvent):
+                if event.belief.observer_id != self.owner_id:
+                    raise ValueError("belief snapshot observer must match memory owner")
+                if event.belief.negotiation_id != self.working.negotiation_id:
+                    raise ValueError("belief snapshot belongs to a different negotiation")
+                if event.belief.opponent_id == self.owner_id:
+                    raise ValueError("belief snapshot cannot model its own owner")
+                scenario.participant(event.belief.opponent_id)
         validation_offer = Offer(
             offer_id=OfferId("snapshot-validation-offer"),
             values=tuple(_validation_issue_value(issue) for issue in scenario.issues),
@@ -500,6 +518,11 @@ class DeterministicMemorySummarizer:
             elif isinstance(event, ReceivedMessageMemoryEvent):
                 facts.append(
                     f"received {event.message.message_type.value} from {event.message.sender}"
+                )
+            elif isinstance(event, BeliefSnapshotMemoryEvent):
+                facts.append(
+                    f"opponent belief for {event.belief.opponent_id} confidence "
+                    f"{event.belief.confidence:.2f}"
                 )
             else:
                 facts.append(f"outcome {event.outcome.status.value}")
@@ -893,6 +916,7 @@ class AgentMemory:
                             else None
                         ),
                         observed_action=event.action,
+                        source_event_id=str(event.action_id),
                         fact=f"Observed {event.action.actor_id} perform {event.action.action.value}.",
                     )
                 self._append_event(memory_event)
@@ -945,6 +969,31 @@ class AgentMemory:
                 characters / self.limits.approximate_characters_per_token
             ),
         )
+
+    def record_belief_snapshot(self, belief: OpponentBeliefState) -> MemorySnapshot:
+        """Persist a policy-produced belief without granting the policy mutable memory access."""
+        if belief.observer_id != self.owner_id:
+            raise MemoryIsolationError("belief snapshot observer must match memory owner")
+        if belief.negotiation_id != self.long_term.negotiation_id:
+            raise MemoryIsolationError("belief snapshot belongs to a different negotiation")
+        if belief.opponent_id == self.owner_id:
+            raise MemoryIsolationError("belief snapshot cannot model its own owner")
+        self.long_term.scenario().participant(belief.opponent_id)
+        visible_ids = set()
+        for event in self.episodic.events:
+            if isinstance(event, ObservationMemoryEvent) and event.source_event_id is not None:
+                visible_ids.add(event.source_event_id)
+            elif isinstance(event, ReceivedMessageMemoryEvent):
+                visible_ids.add(str(event.message.message_id))
+        if not set(belief.evidence_event_ids).issubset(visible_ids):
+            raise MemoryIsolationError("belief snapshot references evidence outside agent memory")
+        self._append_event(
+            BeliefSnapshotMemoryEvent(
+                sequence_number=self._take_sequence(),
+                belief=belief,
+            )
+        )
+        return self.snapshot()
 
     def snapshot(self) -> MemorySnapshot:
         if self.working is None:

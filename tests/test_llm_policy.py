@@ -38,7 +38,13 @@ from llm_negotiation.llm_policy import (
     CognitiveStage,
     LLMNegotiationPolicy,
 )
-from llm_negotiation.memory import AgentMemory, AgentObservation, AgentProfile, PublicAgentIdentity
+from llm_negotiation.memory import (
+    AgentMemory,
+    AgentObservation,
+    AgentProfile,
+    BeliefSnapshotMemoryEvent,
+    PublicAgentIdentity,
+)
 from llm_negotiation.policies import NegotiationPolicy
 from llm_negotiation.protocol import NegotiationProtocol, ProtocolPhase
 
@@ -254,6 +260,17 @@ def test_valid_structured_action_runs_all_cognitive_stages_and_tracks_telemetry(
     assert "AcceptAction" not in schema_text
     assert "CounterAction" not in schema_text
     assert "RejectAction" not in schema_text
+    belief_contexts = {
+        payload["stage"]: payload["participant_visible_context"]
+        for payload in (
+            json.loads(request.messages[-1].content)
+            for request in client.recorded_requests
+        )
+        if payload["stage"] in {"opponent_hypothesis", "planning"}
+    }
+    assert belief_contexts["opponent_hypothesis"]["opponent_beliefs"]
+    assert "uncertain inferences" in belief_contexts["planning"]["belief_guidance"]
+    assert policy.last_trace.opponent_beliefs == policy.last_belief_states
 
 
 def test_opponent_hypothesis_is_updated_from_its_concise_prior_record():
@@ -529,3 +546,10 @@ def test_fake_llm_policies_complete_a_full_protocol_negotiation():
     assert isinstance(policies[BUYER].last_trace.selected_action, AcceptAction)
     assert policies[SELLER].last_trace.used_fallback is False
     assert policies[BUYER].last_trace.used_fallback is False
+    assert all(
+        any(
+            isinstance(event, BeliefSnapshotMemoryEvent)
+            for event in result.memory_snapshots[participant_id].episodic.events
+        )
+        for participant_id in (SELLER, BUYER)
+    )
