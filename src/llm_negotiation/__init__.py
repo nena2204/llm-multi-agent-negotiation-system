@@ -9,6 +9,8 @@ __all__ = [
     "communication",
     "memory",
     "llm",
+    "llm_policy",
+    "llm_prompts",
     "manager",
     "judge",
     "learning",

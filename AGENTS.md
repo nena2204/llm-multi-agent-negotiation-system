@@ -10,6 +10,8 @@
 - `src/llm_negotiation/communication.py`: typed message routing, audit replay, and formatting.
 - `src/llm_negotiation/memory.py`: participant-owned long-term, working, and episodic memory.
 - `src/llm_negotiation/llm/`: provider-independent LLM contracts, offline fake, and optional adapters.
+- `src/llm_negotiation/llm_policy.py`: staged LLM negotiation policy, grounding, and telemetry.
+- `src/llm_negotiation/llm_prompts/`: versioned structured-output prompt templates.
 - `tests/`: pytest unit and CLI smoke tests.
 - `pyproject.toml`: packaging, dependencies, console script, and pytest configuration.
 
@@ -37,6 +39,8 @@ Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and ru
 - Keep model/provider execution configuration separate from agent strategy, persona, and preferences.
 - Keep provider SDK imports behind the common LLM interface and default tests network-disabled.
 - Never log prompts, credentials, private memory, or provider exception bodies by default.
+- Keep LLM prompts versioned and request concise rationale/evidence, never hidden chain-of-thought.
+- Ground every LLM-selected action through domain and participant-visible protocol constraints.
 - Validate public inputs and add focused tests for behavioral changes.
 - Keep runtime dependencies minimal and separate optional/development dependencies.
 - Do not add LLM calls, databases, or web APIs unless a task explicitly requests them.

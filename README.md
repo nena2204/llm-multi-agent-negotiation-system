@@ -166,6 +166,34 @@ pytest -q -m live_api
 If the flag is absent, the live module is skipped before a client is constructed. No live API call
 is part of normal installation or verification.
 
+## Staged LLM negotiation policy
+
+`llm_negotiation.llm_policy.LLMNegotiationPolicy` implements the same `NegotiationPolicy`
+interface as the deterministic baselines. It consumes only a bounded, participant-owned
+`MemorySnapshot`; it never receives or mutates `NegotiationSession`. Its cognitive pipeline is:
+
+1. Build a typed agent-visible observation from public scenario data, the owner's preferences,
+   legal actions, bounded memory, and messages already authorized by `MessageBus`.
+2. Summarize the objective and constraints.
+3. Form or update a concise, uncertain opponent hypothesis using visible behavior only.
+4. Choose a negotiation plan.
+5. Generate exactly one structured action with concise decision rationale and evidence.
+6. Ground the action through the domain schema and visible protocol constraints.
+
+Prompts live in the versioned `llm_negotiation.llm_prompts.negotiation_policy_v1` module. Stage
+responses reject extra fields and prose outside strict JSON. The action response contains a typed
+`NegotiationAction` plus bounded `decision_rationale` and `evidence`; no stage requests or persists
+hidden chain-of-thought.
+
+Grounding revalidates the actor, round, recipients, legal action kind, outstanding-offer reference,
+required unique offer identifier, issue completeness and bounds, and the owner's reservation
+utility. The policy cannot transition protocol state itself. Malformed or context-illegal output is
+given at most one structured repair attempt for the entire decision. A provider failure or failed
+repair invokes the deterministic linear-concession baseline; if that cannot act safely, the policy
+withdraws when withdrawal is legal. Per-stage call attempts, latency, token usage, repair status,
+and concise audit artifacts are exposed through `last_trace` and `cumulative_telemetry` without
+retaining prompts.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install
