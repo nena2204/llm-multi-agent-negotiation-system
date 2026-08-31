@@ -32,8 +32,10 @@ protocol meaning.
 
 Protocol phases are `created`, `active`, `mediation`, `agreed`, `failed`, `withdrawn`, and `expired`.
 A round is one complete rotation through the configured participant order, anchored to the initial
-participant. Mediation is entered by an explicit `request_mediation` action; no mediator policy is
-implemented yet. A trusted coordinator may mark the feasible region `impossible` during session
+participant. Mediation is entered by an explicit `request_mediation` action or a replayable
+deadlock/deadline trigger. Mediator interventions are separate protocol events and their offers are
+non-binding: participants must explicitly accept, counter, or reject them. A trusted coordinator
+may mark the feasible region `impossible` during session
 creation, allowing deterministic failure without adding private preference data to public state.
 
 ## Baseline negotiation policies
@@ -239,6 +241,28 @@ which is itself deterministically verified. Outcomes and correction counts are r
 append-only audit log and exposed by policy benchmark results. Configure `VerificationMode` as
 `deterministic`, `deterministic_and_llm`, or `disabled` for explicit ablation; even in disabled mode,
 the protocol remains the final legality authority.
+
+## Mediation
+
+`llm_negotiation.mediation` provides configurable detection for repeated offers, low concessions,
+offer cycles, repeated invalid actions, and an approaching deadline. Explicit participant requests
+remain typed protocol actions. Automatic deadlock/deadline entry and every mediator intervention
+are replayable protocol events, separate from participant actions. Correlated public mediator
+messages can be emitted through the existing `MessageBus`.
+
+The default `public_only` access mode uses public offers and messages. `confidential_summary` accepts
+mediator-only utility summaries that exclude BATNA prose. The research-only `simulation_oracle`
+mode requires both an explicit mode selection and `allow_simulation_oracle=True`; it is never the
+production default. Public explanations are generated only from public context and do not disclose
+private reservations or preferences.
+
+For a single numeric price, deterministic mediation proposes the midpoint of the permitted
+bargaining information. Multi-issue mediation enumerates a bounded deterministic candidate grid and
+selects by normalized Nash product or max-min welfare. If no candidate satisfies every available
+reservation threshold, the mediator records a refusal rather than forcing a proposal. The optional
+`LLMMediator` uses the provider-independent gateway and strict structured output to ask a clarifying
+question, provide a public disagreement summary, make a typed proposal, or refuse; it cannot accept
+for any participant.
 
 ## Setup
 

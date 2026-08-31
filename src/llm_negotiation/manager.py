@@ -10,12 +10,15 @@ from .domain import (
     ProposeAction,
     ParticipantId,
     RequestMediationAction,
+    MediationAccessMode,
+    MediationTrigger,
     price_only_from_legacy,
 )
 from .domain.legacy import BUYER_ID, PRICE_ISSUE_ID, SELLER_ID
 from .judge import Judge
 from .learning import LearningAgent
 from .protocol import FeasibleRegionStatus, NegotiationProtocol, NegotiationSession, ProtocolPhase
+from .mediation import DeterministicMediator, MediatorConfiguration, MediatorContext
 
 
 class NegotiationManager:
@@ -34,6 +37,7 @@ class NegotiationManager:
         self.protocol_state: Optional[NegotiationSession] = None
         self._protocol: Optional[NegotiationProtocol] = None
         self._offer_sequence = 0
+        self._migration = None
 
     def _record(self, message: str):
         self.history.append(message)
@@ -51,6 +55,7 @@ class NegotiationManager:
         self._offer_sequence = 0
 
         migration = price_only_from_legacy(self.product_name, self.buyer, self.seller, self.rounds)
+        self._migration = migration
         self._protocol = NegotiationProtocol(
             scenario=migration.scenario,
             maximum_rounds=self.rounds + 1,
@@ -164,9 +169,31 @@ class NegotiationManager:
                     reason="Legacy price negotiation exhausted its configured rounds.",
                 )
             )
-            # mediator suggests compromise
-            compromise = round((self.buyer.max_price + self.seller.min_acceptable) / 2.0, 2)
-            self.mediator_suggestion = compromise
+            mediator = DeterministicMediator(
+                MediatorConfiguration(
+                    access_mode=MediationAccessMode.SIMULATION_ORACLE,
+                    allow_simulation_oracle=True,
+                )
+            )
+            intervention = mediator.intervene(
+                MediatorContext(
+                    scenario=self._migration.scenario,
+                    session=self.protocol_state,
+                    access_mode=MediationAccessMode.SIMULATION_ORACLE,
+                    simulation_ground_truth=(
+                        self._migration.buyer_preferences,
+                        self._migration.seller_preferences,
+                    ),
+                ),
+                MediationTrigger.EXPLICIT_REQUEST,
+            )
+            self.protocol_state = self._protocol.apply_mediator_intervention(
+                self.protocol_state, intervention
+            ).state
+            price = intervention.offer.value_for(PRICE_ISSUE_ID)
+            if not isinstance(price, NumericIssueValue):
+                raise RuntimeError("legacy mediator did not produce a numeric price")
+            self.mediator_suggestion = round(price.value, 2)
             self._record(self.mediator.suggest_compromise(self.buyer.max_price, self.seller.min_acceptable))
         return rounds_used
 

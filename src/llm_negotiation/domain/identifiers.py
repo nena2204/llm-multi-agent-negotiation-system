@@ -73,3 +73,8 @@ class MessageId(_Identifier):
 @dataclass(frozen=True, order=True)
 class CorrelationId(_Identifier):
     """Identifier linking protocol events and related messages."""
+
+
+@dataclass(frozen=True, order=True)
+class MediatorInterventionId(_Identifier):
+    """Stable identifier for a non-binding mediator intervention."""

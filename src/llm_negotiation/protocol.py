@@ -22,6 +22,9 @@ from .domain.models import (
     CounterAction,
     DomainModel,
     MessageAction,
+    MediationTrigger,
+    MediatorIntervention,
+    MediatorInterventionKind,
     NegotiationAction,
     NegotiationScenario,
     Offer,
@@ -53,6 +56,8 @@ class FeasibleRegionStatus(str, Enum):
 class ProtocolEventType(str, Enum):
     ACTION_APPLIED = "action_applied"
     SYSTEM_TERMINATED = "system_terminated"
+    MEDIATION_ENTERED = "mediation_entered"
+    MEDIATOR_INTERVENTION = "mediator_intervention"
 
 
 class SystemTerminationReason(str, Enum):
@@ -124,8 +129,36 @@ class SystemTerminatedEvent(DomainModel):
     round_number: int = Field(ge=1)
 
 
+class MediationEnteredEvent(DomainModel):
+    event_type: Literal[ProtocolEventType.MEDIATION_ENTERED] = ProtocolEventType.MEDIATION_ENTERED
+    sequence_number: int = Field(ge=1)
+    correlation_id: CorrelationId
+    trigger: MediationTrigger
+    reason: str = Field(min_length=1, max_length=500)
+    phase_before: Literal[ProtocolPhase.ACTIVE] = ProtocolPhase.ACTIVE
+    phase_after: Literal[ProtocolPhase.MEDIATION] = ProtocolPhase.MEDIATION
+    round_number: int = Field(ge=1)
+
+
+class MediatorInterventionEvent(DomainModel):
+    event_type: Literal[ProtocolEventType.MEDIATOR_INTERVENTION] = (
+        ProtocolEventType.MEDIATOR_INTERVENTION
+    )
+    sequence_number: int = Field(ge=1)
+    correlation_id: CorrelationId
+    intervention: MediatorIntervention
+    phase_before: Literal[ProtocolPhase.MEDIATION] = ProtocolPhase.MEDIATION
+    phase_after: Literal[ProtocolPhase.MEDIATION] = ProtocolPhase.MEDIATION
+    round_number: int = Field(ge=1)
+
+
 ProtocolEvent = Annotated[
-    Union[ActionAppliedEvent, SystemTerminatedEvent],
+    Union[
+        ActionAppliedEvent,
+        SystemTerminatedEvent,
+        MediationEnteredEvent,
+        MediatorInterventionEvent,
+    ],
     Field(discriminator="event_type"),
 ]
 
@@ -219,6 +252,7 @@ class NegotiationProtocol:
         maximum_rounds: int,
         initial_turn: Optional[ParticipantId] = None,
         feasible_region: FeasibleRegionStatus = FeasibleRegionStatus.UNKNOWN,
+        mediator_ids: Optional[Tuple[ParticipantId, ...]] = None,
     ) -> None:
         if not isinstance(maximum_rounds, int) or isinstance(maximum_rounds, bool) or maximum_rounds <= 0:
             raise ValueError("maximum_rounds must be a positive integer")
@@ -231,6 +265,20 @@ class NegotiationProtocol:
         initial_index = self.participants.index(self.initial_turn)
         self._turn_order = self.participants[initial_index:] + self.participants[:initial_index]
         self.feasible_region = feasible_region
+        configured_mediators = (
+            mediator_ids
+            if mediator_ids is not None
+            else (
+                ()
+                if ParticipantId("mediator") in self.participants
+                else (ParticipantId("mediator"),)
+            )
+        )
+        if len(set(configured_mediators)) != len(configured_mediators):
+            raise ValueError("mediator_ids must be unique")
+        if set(configured_mediators).intersection(self.participants):
+            raise ValueError("mediators must be separate from agreement participants")
+        self.mediator_ids = tuple(configured_mediators)
 
     def _created_session(self) -> NegotiationSession:
         return NegotiationSession(
@@ -298,6 +346,83 @@ class NegotiationProtocol:
             phase_after=phase_after,
             round_before=state.round_number,
             round_after=round_after,
+        )
+        updates["event_sequence"] = state.event_sequence + (event,)
+        new_state = _replace_session(state, updates)
+        return TransitionResult(state=new_state, events=(event,))
+
+    def enter_mediation(
+        self,
+        state: NegotiationSession,
+        trigger: MediationTrigger,
+        reason: str,
+    ) -> TransitionResult:
+        """Enter mediation from an automatic, replayable deadlock/deadline trigger."""
+
+        self._validate_state_belongs_to_protocol(state)
+        if state.phase is not ProtocolPhase.ACTIVE:
+            raise IllegalPhaseError("automatic mediation entry is legal only from the active phase")
+        if trigger is MediationTrigger.EXPLICIT_REQUEST:
+            raise IllegalActionError("explicit mediation must use RequestMediationAction")
+        if not reason or not reason.strip():
+            raise ValueError("mediation entry reason must not be blank")
+        sequence_number = len(state.event_sequence) + 1
+        event = MediationEnteredEvent(
+            sequence_number=sequence_number,
+            correlation_id=CorrelationId(f"correlation-mediation-{sequence_number}"),
+            trigger=trigger,
+            reason=reason,
+            round_number=state.round_number,
+        )
+        new_state = _replace_session(
+            state,
+            {
+                "phase": ProtocolPhase.MEDIATION,
+                "event_sequence": state.event_sequence + (event,),
+            },
+        )
+        return TransitionResult(state=new_state, events=(event,))
+
+    def apply_mediator_intervention(
+        self,
+        state: NegotiationSession,
+        intervention: MediatorIntervention,
+    ) -> TransitionResult:
+        """Record a non-binding mediator intervention without consuming a participant turn."""
+
+        self._validate_state_belongs_to_protocol(state)
+        if state.phase is not ProtocolPhase.MEDIATION:
+            raise IllegalPhaseError("mediator interventions require the mediation phase")
+        if intervention.mediator_id not in self.mediator_ids:
+            raise IllegalActorError("intervention actor is not a configured mediator")
+        if intervention.negotiation_id != state.scenario_id:
+            raise IllegalActionError("intervention negotiation id does not match the session")
+        if intervention.round_number != state.round_number:
+            raise RoundMismatchError("intervention round does not match the session round")
+        if any(
+            isinstance(event, MediatorInterventionEvent)
+            and event.intervention.intervention_id == intervention.intervention_id
+            for event in state.event_sequence
+        ):
+            raise IllegalActionError("mediator intervention identifier has already been used")
+
+        updates: dict[str, Any] = {}
+        if intervention.kind is MediatorInterventionKind.PROPOSAL:
+            if intervention.offer is None:
+                raise IllegalActionError("mediator proposal is missing its offer")
+            self.scenario.validate_offer(intervention.offer)
+            self._ensure_new_offer_id(state, intervention.offer.offer_id)
+            updates.update(
+                latest_valid_offer=intervention.offer,
+                offer_acceptances=(),
+            )
+
+        sequence_number = len(state.event_sequence) + 1
+        event = MediatorInterventionEvent(
+            sequence_number=sequence_number,
+            correlation_id=CorrelationId(f"correlation-intervention-{sequence_number}"),
+            intervention=intervention,
+            round_number=state.round_number,
         )
         updates["event_sequence"] = state.event_sequence + (event,)
         new_state = _replace_session(state, updates)
@@ -422,6 +547,12 @@ class NegotiationProtocol:
             if isinstance(event, ActionAppliedEvent) and isinstance(event.action, (ProposeAction, CounterAction)):
                 if event.action.offer.offer_id == offer_id:
                     raise IllegalActionError(f"offer identifier '{offer_id}' has already been used")
+            if (
+                isinstance(event, MediatorInterventionEvent)
+                and event.intervention.offer is not None
+                and event.intervention.offer.offer_id == offer_id
+            ):
+                raise IllegalActionError(f"offer identifier '{offer_id}' has already been used")
 
     def _record_offer_and_advance(
         self,
@@ -479,6 +610,10 @@ class NegotiationProtocol:
                 if self.feasible_region is not FeasibleRegionStatus.IMPOSSIBLE:
                     raise ReplayError("impossible-region event does not match protocol configuration")
                 result = self._terminate_impossible(state)
+            elif isinstance(recorded, MediationEnteredEvent):
+                result = self.enter_mediation(state, recorded.trigger, recorded.reason)
+            elif isinstance(recorded, MediatorInterventionEvent):
+                result = self.apply_mediator_intervention(state, recorded.intervention)
             else:
                 result = self.transition(state, recorded.action)
             generated = result.events[0]

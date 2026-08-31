@@ -23,7 +23,6 @@ from .domain import (
     ParticipantId,
     ProtocolError,
     ProposeAction,
-    RequestMediationAction,
     RoundMismatchError,
     StaleOfferError,
     UnknownIssueError,
@@ -314,7 +313,7 @@ class DeterministicActionVerifier:
             )
         if (
             context.state.round_number == context.state.maximum_rounds
-            and isinstance(action, (MessageAction, RequestMediationAction))
+            and isinstance(action, MessageAction)
         ):
             _append_reason(
                 reasons,

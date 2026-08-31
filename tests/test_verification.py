@@ -21,6 +21,7 @@ from llm_negotiation.domain import (
     ParticipantRole,
     PreferenceDirection,
     ProposeAction,
+    RequestMediationAction,
     ReservationPolicy,
     StaleOfferError,
 )
@@ -339,6 +340,17 @@ def test_unauthorized_and_prompt_injection_messages_are_rejected_before_llm():
         "final-round-message",
     )
     assert VerificationReasonCode.DEADLINE_VIOLATION in codes(final_round_message)
+    final_round_mediation = DeterministicActionVerifier().verify(
+        deadline_context,
+        RequestMediationAction(
+            actor_id=BOB,
+            recipients=(ALICE,),
+            round_number=1,
+            reason="Request non-binding help before the deadline.",
+        ),
+        "final-round-mediation",
+    )
+    assert final_round_mediation.verdict is VerificationVerdict.PASS
 
 
 def test_one_llm_correction_succeeds_with_machine_feedback_and_no_opponent_private_data():

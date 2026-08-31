@@ -14,6 +14,7 @@ __all__ = [
     "beliefs",
     "opponent",
     "verification",
+    "mediation",
     "manager",
     "judge",
     "learning",

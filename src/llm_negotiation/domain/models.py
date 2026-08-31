@@ -16,7 +16,7 @@ from .errors import (
     UnknownIssueError,
     UnknownParticipantError,
 )
-from .identifiers import AgreementId, IssueId, OfferId, ParticipantId
+from .identifiers import AgreementId, IssueId, MediatorInterventionId, OfferId, ParticipantId
 
 
 WEIGHT_SUM_TOLERANCE = 1e-6
@@ -61,6 +61,24 @@ class OutcomeStatus(str, Enum):
     AGREEMENT = "agreement"
     NO_AGREEMENT = "no_agreement"
     WITHDRAWN = "withdrawn"
+
+
+class MediationAccessMode(str, Enum):
+    PUBLIC_ONLY = "public_only"
+    CONFIDENTIAL_SUMMARY = "confidential_summary"
+    SIMULATION_ORACLE = "simulation_oracle"
+
+
+class MediationTrigger(str, Enum):
+    EXPLICIT_REQUEST = "explicit_request"
+    DEADLOCK = "deadlock"
+    DEADLINE = "deadline"
+
+
+class MediatorInterventionKind(str, Enum):
+    PROPOSAL = "proposal"
+    CLARIFYING_QUESTION = "clarifying_question"
+    REFUSAL = "refusal"
 
 
 class Participant(DomainModel):
@@ -285,6 +303,36 @@ class RequestMediationAction(NegotiationActionBase):
 class WithdrawAction(NegotiationActionBase):
     action: Literal[ActionType.WITHDRAW] = ActionType.WITHDRAW
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class MediatorIntervention(DomainModel):
+    """A non-binding mediator output, deliberately separate from participant actions."""
+
+    intervention_id: MediatorInterventionId
+    mediator_id: ParticipantId
+    negotiation_id: str = Field(min_length=1, max_length=100)
+    round_number: int = Field(ge=1)
+    trigger: MediationTrigger
+    access_mode: MediationAccessMode = MediationAccessMode.PUBLIC_ONLY
+    kind: MediatorInterventionKind
+    public_disagreement_summary: Optional[str] = Field(
+        default=None, min_length=1, max_length=1000
+    )
+    public_explanation: str = Field(min_length=1, max_length=1000)
+    offer: Optional[Offer] = None
+    question: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def payload_matches_kind(self) -> MediatorIntervention:
+        if self.kind is MediatorInterventionKind.PROPOSAL:
+            if self.offer is None or self.question is not None:
+                raise ValueError("a mediator proposal requires one offer and no question")
+        elif self.kind is MediatorInterventionKind.CLARIFYING_QUESTION:
+            if self.question is None or self.offer is not None:
+                raise ValueError("a clarifying intervention requires one question and no offer")
+        elif self.offer is not None or self.question is not None:
+            raise ValueError("a mediation refusal cannot contain an offer or question")
+        return self
 
 
 NegotiationAction = Annotated[

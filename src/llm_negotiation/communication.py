@@ -19,7 +19,12 @@ from .domain import (
     ProposeAction,
 )
 from .domain.models import DomainModel
-from .protocol import ActionAppliedEvent, NegotiationSession, ProtocolEvent
+from .protocol import (
+    ActionAppliedEvent,
+    MediatorInterventionEvent,
+    NegotiationSession,
+    ProtocolEvent,
+)
 
 
 SYSTEM_SENDER = ParticipantId("system")
@@ -33,6 +38,9 @@ class MessageType(str, Enum):
     MEDIATION_REQUEST = "mediation_request"
     CRITIQUE = "critique"
     SYSTEM_NOTICE = "system_notice"
+    MEDIATOR_PROPOSAL = "mediator_proposal"
+    MEDIATOR_QUESTION = "mediator_question"
+    MEDIATOR_NOTICE = "mediator_notice"
 
 
 class MessageVisibility(str, Enum):
@@ -315,6 +323,12 @@ class EpisodeRecord(DomainModel):
             for event in actions.values()
             if isinstance(event.action, (ProposeAction, CounterAction))
         }
+        offers.update(
+            event.intervention.offer.offer_id
+            for event in self.protocol_events
+            if isinstance(event, MediatorInterventionEvent)
+            and event.intervention.offer is not None
+        )
         for message in self.messages:
             if message.referenced_action_id is not None:
                 event = actions.get(message.referenced_action_id)
