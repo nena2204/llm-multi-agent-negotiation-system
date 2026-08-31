@@ -216,6 +216,30 @@ terminal `NegotiationSession` and reports reservation
 interval coverage/width, probability assigned to the actual strategy, goal Brier score, and
 confidence error. Ground truth is never passed to either modeller or the policy decision path.
 
+## Action verification
+
+`llm_negotiation.verification` places a side-effect-free verification gate before protocol
+transition. `DeterministicActionVerifier` parses the typed schema and preflights the action through
+the authoritative pure protocol transition, then checks actor ownership, turn/phase and deadline,
+offer completeness and public issue bounds, stale or fabricated offer references, the proposer's
+own reservation utility, authorized message recipients, and conservative prompt-injection patterns.
+It never evaluates against an opponent's private profile.
+
+`VerificationResult` records a pass, rejection, or ablation skip with machine-readable reasons,
+severity, a deterministic checked-action identifier, and verifier/provider metadata. The optional
+`LLMActionVerifier` receives identity-blinded public rules, public issue definitions, declared
+strategy, visible evidence, and the candidate action. It may add a qualitative rejection for
+strategy, evidence, or safety concerns, but it is never called after deterministic rejection and
+can never turn that rejection into a pass. Provider or structured-output failure fails closed.
+
+`VerificationCoordinator` permits zero or one correction attempt. Feedback contains only concise
+machine reasons; `LLMActionCorrector` uses the proposing participant's bounded view and never sees
+opponent preferences. A rejected or failed correction produces a deterministic withdrawal fallback,
+which is itself deterministically verified. Outcomes and correction counts are retained in an
+append-only audit log and exposed by policy benchmark results. Configure `VerificationMode` as
+`deterministic`, `deterministic_and_llm`, or `disabled` for explicit ablation; even in disabled mode,
+the protocol remains the final legality authority.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install

@@ -13,6 +13,7 @@ __all__ = [
     "llm_prompts",
     "beliefs",
     "opponent",
+    "verification",
     "manager",
     "judge",
     "learning",

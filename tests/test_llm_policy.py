@@ -553,3 +553,10 @@ def test_fake_llm_policies_complete_a_full_protocol_negotiation():
         )
         for participant_id in (SELLER, BUYER)
     )
+    assert len(result.verification_log) == 2
+    assert all(
+        entry.results[-1].verdict.value == "pass"
+        and entry.correction_count == 0
+        and entry.used_fallback is False
+        for entry in result.verification_log
+    )
