@@ -264,6 +264,54 @@ reservation threshold, the mediator records a refusal rather than forcing a prop
 question, provide a public disagreement summary, make a typed proposal, or refuse; it cannot accept
 for any participant.
 
+## Evaluation
+
+`llm_negotiation.evaluation` keeps authoritative deterministic metrics separate from optional,
+model-dependent qualitative judgement. Evaluation receives the terminal session and explicitly
+supplied post-episode participant preferences; those preferences are not added to public protocol
+state. All utilities use the domain's normalized `[0, 1]` utility function.
+
+The deterministic formulas are:
+
+- Agreement is reached exactly when the protocol phase is `agreed`; validity means the resulting
+  agreement passes the public scenario's complete-offer and all-participant acceptance rules.
+- Rounds to agreement is the terminal session round. Elapsed time is an optional measured duration
+  supplied by the episode runner and is reported only for a valid agreement.
+- Agreement utility `u_i` is participant `i`'s normalized utility for the final offer. Outcome
+  utility is `u_i` for a valid agreement and that participant's BATNA utility otherwise. Named
+  buyer/seller fields report this outcome utility; agreement-only utility remains explicit in each
+  participant record.
+- Individual rationality is `u_i >= reservation_i`, evaluated separately from public validity.
+- Social welfare is `sum(outcome_utility_i)`.
+- Bargaining gain is `max(0, outcome_utility_i - BATNA_i)`. Nash product is the product of these
+  gains for a valid agreement and zero when there is no agreement.
+- Utility balance is `1 - (max(u_i) - min(u_i))` for a valid agreement. It measures equality of
+  normalized utility, not validity or Pareto efficiency.
+- Pareto efficiency and distance use the participant-utility vectors of a deterministic candidate
+  frontier. Categorical domains are exhaustive; numeric issues use a documented configurable grid
+  that always includes the final offer. Distance is Euclidean distance in normalized utility space,
+  and reports explicitly identify numeric frontiers as approximations or mark oversized searches
+  `intractable`.
+- Invalid-action rate is rejected initial submissions divided by actions submitted through the
+  verification gate. Correction rate is correction attempts divided by those submissions. Both are
+  zero when no verification submissions were logged.
+- Message totals, public-message totals, model calls, total latency, and provider token usage are
+  summed from typed episode telemetry records without logging prompts.
+
+The old price midpoint score remains available only as `legacy_midpoint_fairness`: it computes
+`max(0, 100 - 100 * abs(price - midpoint) / bargaining_range)` and preserves the historical score
+of `100` for a zero-width range. It is not used as the authoritative fairness metric.
+
+`LLMJudge` receives a size-bounded public transcript with stable `participant-N` labels, public
+issues and outcome, and no deterministic score to imitate. It returns strict rubric scores for
+process fairness, communication quality, justification quality, and coercion safety. Every rubric
+score carries evidence citations restricted to supplied event ids. Private preferences are
+unavailable by default; the separately
+labelled `research_private` mode requires explicit opt-in and remains anonymized. Multiple models
+and samples are retained individually and summarized with descriptive statistics—not majority vote
+or ground truth. `EvaluationBundle` stores deterministic and qualitative reports in separate fields
+and `export_evaluation_json()` provides a versioned JSON export.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install

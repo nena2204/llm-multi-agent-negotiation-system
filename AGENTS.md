@@ -15,6 +15,7 @@
 - `src/llm_negotiation/opponent.py`: observable evidence, heuristic/LLM modellers, and evaluation.
 - `src/llm_negotiation/verification.py`: deterministic/LLM action checks and bounded correction.
 - `src/llm_negotiation/mediation.py`: mediation triggers, privacy modes, compromise search, and services.
+- `src/llm_negotiation/evaluation.py`: authoritative metrics and separate qualitative judge reports.
 - `src/llm_negotiation/llm_prompts/`: versioned structured-output prompt templates.
 - `tests/`: pytest unit and CLI smoke tests.
 - `pyproject.toml`: packaging, dependencies, console script, and pytest configuration.
@@ -48,6 +49,7 @@ Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and ru
 - Infer opponent beliefs only from participant-visible evidence; simulation ground truth is evaluation-only.
 - Keep deterministic verification authoritative; qualitative verifiers may reject but never override it.
 - Keep mediator suggestions non-binding, privacy-mode scoped, and separate from participant actions.
+- Keep deterministic evaluation authoritative and qualitative judge outputs separate and model-labelled.
 - Validate public inputs and add focused tests for behavioral changes.
 - Keep runtime dependencies minimal and separate optional/development dependencies.
 - Do not add LLM calls, databases, or web APIs unless a task explicitly requests them.

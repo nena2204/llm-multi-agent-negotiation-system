@@ -2,6 +2,11 @@ from typing import Dict, Any
 
 
 class Judge:
+    """Legacy price-only judge retained for CLI compatibility.
+
+    New research evaluation belongs in :mod:`llm_negotiation.evaluation`.
+    """
+
     def evaluate(self, history, deal_reached: bool, final_price, buyer, seller, rounds_used: int) -> Dict[str, Any]:
         result = {
             "deal_reached": deal_reached,
