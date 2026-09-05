@@ -16,6 +16,7 @@
 - `src/llm_negotiation/verification.py`: deterministic/LLM action checks and bounded correction.
 - `src/llm_negotiation/mediation.py`: mediation triggers, privacy modes, compromise search, and services.
 - `src/llm_negotiation/evaluation.py`: authoritative metrics and separate qualitative judge reports.
+- `src/llm_negotiation/orchestration.py`: dependency-injected episode lifecycle and replay.
 - `src/llm_negotiation/llm_prompts/`: versioned structured-output prompt templates.
 - `tests/`: pytest unit and CLI smoke tests.
 - `pyproject.toml`: packaging, dependencies, console script, and pytest configuration.

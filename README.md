@@ -1,8 +1,8 @@
 # LLM-Based Multi-Agent Negotiation System
 
 This project is a deterministic, rule-based simulation of negotiation between buyer, seller,
-mediator, judge, and learning roles. It includes an optional provider-independent LLM boundary, but
-no negotiation policy calls an LLM yet and the default test suite never accesses the network.
+mediator, judge, and learning roles. It includes an optional provider-independent LLM policy, while
+the default test suite remains fully offline and never accesses the network.
 
 ## Features
 
@@ -13,6 +13,7 @@ no negotiation policy calls an LLM yet and the default test suite never accesses
 - Reproducible non-LLM baseline policies for multi-issue experiments
 - Command-line interface and optional Streamlit UI
 - Typed LLM client contract with deterministic fake and optional OpenAI Responses API adapter
+- Dependency-injected orchestration with replayable events, budgets, mediation, and evaluation
 
 ## Domain model
 
@@ -311,6 +312,31 @@ labelled `research_private` mode requires explicit opt-in and remains anonymized
 and samples are retained individually and summarized with descriptive statistics—not majority vote
 or ground truth. `EvaluationBundle` stores deterministic and qualitative reports in separate fields
 and `export_evaluation_json()` provides a versioned JSON export.
+
+## Episode orchestration
+
+`llm_negotiation.orchestration.NegotiationOrchestrator` is the single execution lifecycle used by
+the policy benchmark and legacy CLI adapter. Policies, message bus, verification coordinator,
+mediator, optional model gateway, participant-owned memory store, clock, and random seed are all
+injected explicitly; no global mutable episode state is used. The current implementation is a
+bilateral alternating-offer protocol. The injected `ProtocolFactory` is the explicit extension
+boundary for a future multiparty protocol; the default factory rejects multiparty sessions clearly.
+
+Each iteration builds only the current participant's authorized memory snapshot, obtains one typed
+action, applies bounded correction and deterministic verification, transitions the protocol,
+delivers correlated messages/events, and refreshes participant-specific memories. Requested or
+automatic mediation remains non-binding and is recorded separately. The returned `EpisodeResult`
+contains the outcome, public transcript, complete event/message audit streams, content-addressed
+memory references, authoritative metrics, and provider/model-labelled usage records. The public
+transcript is validated as exactly the public subset of the append-only audit stream, and correlated
+message/action references are revalidated during result deserialization.
+
+`OrchestratorConfiguration` bounds rounds, episode/action elapsed time, total actions, and model
+calls. An episode-scoped gateway applies the model-call limit across policies, opponent modelling,
+verification, correction, and mediation, and reduces retry allowance to the remaining hard budget.
+Its explicit failure policy either uses an injected deterministic fallback, records a
+verified withdrawal, or raises `OrchestrationError`. `NegotiationOrchestrator.replay()` reconstructs
+the final state from protocol events and recomputes metrics from the stored episode artifacts.
 
 ## Setup
 

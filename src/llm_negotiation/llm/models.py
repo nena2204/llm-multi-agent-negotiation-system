@@ -23,6 +23,7 @@ class LLMMessageRole(str, Enum):
 
 
 class LLMErrorCode(str, Enum):
+    BUDGET_EXCEEDED = "budget_exceeded"
     CONFIGURATION = "configuration"
     AUTHENTICATION = "authentication"
     PERMISSION_DENIED = "permission_denied"

@@ -37,6 +37,7 @@ from .domain import (
 from .llm import (
     LLMClient,
     LLMClientError,
+    LLMErrorCode,
     LLMMessage,
     LLMRequest,
     LLMUsage,
@@ -742,7 +743,11 @@ class LLMNegotiationPolicy:
         try:
             response = self.client.generate(request)
         except LLMClientError as error:
-            metrics.model_calls += max(1, error.info.attempts)
+            metrics.model_calls += (
+                0
+                if error.info.code is LLMErrorCode.BUDGET_EXCEEDED
+                else max(1, error.info.attempts)
+            )
             metrics.latency_ms += max(0.0, (self._clock() - started) * 1000.0)
             metrics.succeeded = False
             metrics.failure_code = f"llm_{error.info.code.value}"

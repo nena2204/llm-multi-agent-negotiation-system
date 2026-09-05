@@ -907,7 +907,9 @@ class AgentMemory:
                 else:
                     memory_event = ObservationMemoryEvent(
                         sequence_number=self._take_sequence(),
-                        round_number=event.round_after,
+                        # Evidence belongs to the round declared by the action. A bilateral
+                        # turn may advance the resulting session into the next round.
+                        round_number=event.action.round_number,
                         phase=event.phase_after,
                         current_turn=session.current_turn,
                         outstanding_offer_id=(
