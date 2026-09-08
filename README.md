@@ -14,6 +14,7 @@ the default test suite remains fully offline and never accesses the network.
 - Command-line interface and optional Streamlit UI
 - Typed LLM client contract with deterministic fake and optional OpenAI Responses API adapter
 - Dependency-injected orchestration with replayable events, budgets, mediation, and evaluation
+- Explicit multiparty proposal, deliberation, revision, and voting semantics
 
 ## Domain model
 
@@ -318,9 +319,9 @@ and `export_evaluation_json()` provides a versioned JSON export.
 `llm_negotiation.orchestration.NegotiationOrchestrator` is the single execution lifecycle used by
 the policy benchmark and legacy CLI adapter. Policies, message bus, verification coordinator,
 mediator, optional model gateway, participant-owned memory store, clock, and random seed are all
-injected explicitly; no global mutable episode state is used. The current implementation is a
-bilateral alternating-offer protocol. The injected `ProtocolFactory` is the explicit extension
-boundary for a future multiparty protocol; the default factory rejects multiparty sessions clearly.
+injected explicitly; no global mutable episode state is used. The default factory remains the
+backward-compatible bilateral alternating-offer protocol. An explicitly injected
+`MultipartyProtocolFactory` enables staged group negotiation.
 
 Each iteration builds only the current participant's authorized memory snapshot, obtains one typed
 action, applies bounded correction and deterministic verification, transitions the protocol,
@@ -337,6 +338,47 @@ verification, correction, and mediation, and reduces retry allowance to the rema
 Its explicit failure policy either uses an injected deterministic fallback, records a
 verified withdrawal, or raises `OrchestrationError`. `NegotiationOrchestrator.replay()` reconstructs
 the final state from protocol events and recomputes metrics from the stored episode artifacts.
+
+## Multiparty research protocol
+
+`llm_negotiation.multiparty` defines explicit semantics for groups of three or more principals.
+`MultipartyProtocolConfiguration` names the complete speaking order, eligible proposal owners and
+voters, required participants, coalition rules, and one of three acceptance rules: unanimity,
+strict majority (`floor(n/2) + 1`), or threshold (`ceil(threshold * n)`). Required participants must
+personally approve an offer regardless of the numerical quorum. Their own reservation utility is
+enforced by the authoritative verifier, so majority pressure cannot manufacture consent.
+The resolved voter set, quorum, rule name, and required participants are also embedded in the
+serialized session, allowing agreement validity to be checked without relying on undocumented
+factory state.
+
+An episode has four bounded stages:
+
+1. Every eligible proposer creates an independent initial proposal from an empty participant view;
+   no earlier proposal, reasoning, or message is visible until all initial proposals are sealed.
+2. Each principal sends a typed critique in configured speaking order for the configured number of
+   deliberation passes. Private caucuses are denied unless their exact membership is allow-listed.
+3. Eligible owners receive bounded revision turns in speaking order, with every offer attributed to
+   its proposer. Each valid revision replaces the outstanding offer, so the last scheduled revision
+   is the unambiguous ballot proposal.
+4. Eligible voters explicitly accept or reject the final outstanding offer. Votes always reference
+   that offer, the quorum is deterministic, and required-participant rejection ends without a deal.
+
+Proposals, revisions, and votes are public protocol acts and must address every other principal.
+Only deliberation messages may use an explicitly allow-listed private coalition.
+
+The concrete `three_principal_scenario()` negotiates research-budget allocation and launch timing
+between Operations, Research, and Community. Their personas, utility weights, preference directions,
+categorical values, reservation utilities, and baseline strategy assignments differ. Optional model
+configuration is stored in `TeamMemberConfiguration`, separate from `AgentProfile` and its private
+preferences. Policies still receive only their own bounded memory snapshot, and public critiques do
+not contain private utility functions.
+
+`summarize_transcript()` deterministically compacts large visible transcripts while retaining one
+source action/correlation id for every input message. `run_team_comparison()` runs homogeneous and
+heterogeneous configurations for two, three, and four agents. It reports outcomes, welfare,
+mean outcome utility (for a size-aware comparison), and independent-proposal diversity as
+experimental observations and deliberately makes no claim that diversity or team size is always
+beneficial.
 
 ## Setup
 

@@ -17,6 +17,8 @@
 - `src/llm_negotiation/mediation.py`: mediation triggers, privacy modes, compromise search, and services.
 - `src/llm_negotiation/evaluation.py`: authoritative metrics and separate qualitative judge reports.
 - `src/llm_negotiation/orchestration.py`: dependency-injected episode lifecycle and replay.
+- `src/llm_negotiation/multiparty.py`: staged group protocol, coalition rules, and three-party scenario.
+- `src/llm_negotiation/team_experiment.py`: deterministic size/composition comparison experiment.
 - `src/llm_negotiation/llm_prompts/`: versioned structured-output prompt templates.
 - `tests/`: pytest unit and CLI smoke tests.
 - `pyproject.toml`: packaging, dependencies, console script, and pytest configuration.
@@ -51,6 +53,7 @@ Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and ru
 - Keep deterministic verification authoritative; qualitative verifiers may reject but never override it.
 - Keep mediator suggestions non-binding, privacy-mode scoped, and separate from participant actions.
 - Keep deterministic evaluation authoritative and qualitative judge outputs separate and model-labelled.
+- Keep independent multiparty proposals sealed until initialization completes; required voters retain consent rights.
 - Validate public inputs and add focused tests for behavioral changes.
 - Keep runtime dependencies minimal and separate optional/development dependencies.
 - Do not add LLM calls, databases, or web APIs unless a task explicitly requests them.

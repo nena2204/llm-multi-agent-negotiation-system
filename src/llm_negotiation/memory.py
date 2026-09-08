@@ -34,9 +34,12 @@ from .domain import (
 from .domain.models import DomainModel, Issue
 from .protocol import (
     ActionAppliedEvent,
+    AcceptanceSemantics,
     NegotiationSession,
     ProtocolEvent,
     ProtocolPhase,
+    ProtocolStage,
+    OfferVote,
     SystemTerminatedEvent,
     legal_action_types_for,
 )
@@ -222,6 +225,8 @@ class WorkingMemory(DomainModel):
     rounds_remaining: int = Field(ge=0)
     current_turn: Optional[ParticipantId]
     phase: ProtocolPhase
+    protocol_stage: ProtocolStage = ProtocolStage.BILATERAL
+    acceptance_semantics: Optional[AcceptanceSemantics] = None
     visible_messages: Tuple[VisibleMessage, ...] = ()
     recent_offers: Tuple[RecentOfferMemory, ...] = ()
     current_utility_estimates: Tuple[OfferUtilityEstimate, ...] = ()
@@ -434,6 +439,25 @@ class MemorySnapshot(DomainModel):
             for offer_id, utility in expected_estimates.items()
         ):
             raise ValueError("working-memory utility estimate does not match owner preferences")
+        agreement = (
+            self.working.outcome.agreement
+            if self.working.outcome is not None
+            else None
+        )
+        reconstructed_acceptances = agreement.accepted_by if agreement is not None else ()
+        reconstructed_votes = (
+            tuple(
+                OfferVote(
+                    offer_id=agreement.offer.offer_id,
+                    voter_id=participant_id,
+                    approve=True,
+                )
+                for participant_id in agreement.accepted_by
+            )
+            if agreement is not None
+            and self.working.protocol_stage is ProtocolStage.VOTING
+            else ()
+        )
         reconstructed_state = NegotiationSession(
             scenario_id=self.working.negotiation_id,
             participants=tuple(
@@ -446,6 +470,10 @@ class MemorySnapshot(DomainModel):
             latest_valid_offer=self.working.outstanding_offer,
             phase=self.working.phase,
             outcome=self.working.outcome,
+            protocol_stage=self.working.protocol_stage,
+            offer_acceptances=reconstructed_acceptances,
+            votes=reconstructed_votes,
+            acceptance_semantics=self.working.acceptance_semantics,
         )
         expected_legal_actions = legal_action_types_for(reconstructed_state, self.owner_id)
         if self.working.legal_actions != expected_legal_actions:
@@ -841,6 +869,8 @@ class AgentMemory:
             rounds_remaining=observation.session.maximum_rounds - observation.session.round_number,
             current_turn=observation.session.current_turn,
             phase=observation.session.phase,
+            protocol_stage=observation.session.protocol_stage,
+            acceptance_semantics=observation.session.acceptance_semantics,
             visible_messages=visible,
             recent_offers=recent,
             current_utility_estimates=estimates,

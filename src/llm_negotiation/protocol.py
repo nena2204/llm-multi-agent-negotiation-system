@@ -47,6 +47,16 @@ class ProtocolPhase(str, Enum):
     EXPIRED = "expired"
 
 
+class ProtocolStage(str, Enum):
+    """Fine-grained lifecycle stage; bilateral sessions retain ``bilateral``."""
+
+    BILATERAL = "bilateral"
+    INDEPENDENT_PROPOSALS = "independent_proposals"
+    DELIBERATION = "deliberation"
+    REVISION = "revision"
+    VOTING = "voting"
+
+
 class FeasibleRegionStatus(str, Enum):
     UNKNOWN = "unknown"
     FEASIBLE = "feasible"
@@ -84,6 +94,29 @@ def legal_action_types_for(
         raise IllegalActorError(f"participant '{actor_id}' is not in the session")
     if state.phase in TERMINAL_PHASES:
         return ()
+    if state.protocol_stage is ProtocolStage.INDEPENDENT_PROPOSALS:
+        return (
+            (ActionType.PROPOSE, ActionType.WITHDRAW)
+            if actor_id == state.current_turn
+            else (ActionType.WITHDRAW,)
+        )
+    if state.protocol_stage is ProtocolStage.DELIBERATION:
+        return (
+            (ActionType.MESSAGE, ActionType.WITHDRAW)
+            if actor_id == state.current_turn
+            else (ActionType.WITHDRAW,)
+        )
+    if state.protocol_stage is ProtocolStage.REVISION:
+        if actor_id != state.current_turn:
+            return (ActionType.WITHDRAW,)
+        kind = ActionType.COUNTER if state.latest_valid_offer is not None else ActionType.PROPOSE
+        return (kind, ActionType.WITHDRAW)
+    if state.protocol_stage is ProtocolStage.VOTING:
+        return (
+            (ActionType.ACCEPT, ActionType.REJECT, ActionType.WITHDRAW)
+            if actor_id == state.current_turn
+            else (ActionType.WITHDRAW,)
+        )
     legal = [ActionType.WITHDRAW]
     if state.phase is ProtocolPhase.CREATED:
         if actor_id == state.current_turn:
@@ -163,6 +196,44 @@ ProtocolEvent = Annotated[
 ]
 
 
+class ProposalOwnership(DomainModel):
+    offer_id: OfferId
+    owner_id: ParticipantId
+    initial: bool
+
+
+class OfferVote(DomainModel):
+    offer_id: OfferId
+    voter_id: ParticipantId
+    approve: bool
+
+
+class AcceptanceSemantics(DomainModel):
+    """Serializable public quorum rules for a multiparty session."""
+
+    rule_name: str = Field(min_length=1, max_length=50)
+    eligible_voters: Tuple[ParticipantId, ...] = Field(min_length=2)
+    required_participants: Tuple[ParticipantId, ...] = ()
+    approval_count: int = Field(ge=2)
+
+    @field_validator("eligible_voters", "required_participants", mode="before")
+    @classmethod
+    def tuple_participants(cls, value: Any) -> Any:
+        return _list_to_tuple(value)
+
+    @model_validator(mode="after")
+    def valid_quorum(self) -> "AcceptanceSemantics":
+        if len(set(self.eligible_voters)) != len(self.eligible_voters):
+            raise ValueError("eligible voters must be unique")
+        if len(set(self.required_participants)) != len(self.required_participants):
+            raise ValueError("required participants must be unique")
+        if not set(self.required_participants).issubset(set(self.eligible_voters)):
+            raise ValueError("required participants must be eligible voters")
+        if self.approval_count > len(self.eligible_voters):
+            raise ValueError("approval count cannot exceed eligible voters")
+        return self
+
+
 class NegotiationSession(DomainModel):
     scenario_id: str = Field(min_length=1, max_length=100)
     participants: Tuple[ParticipantId, ...] = Field(min_length=2)
@@ -174,8 +245,21 @@ class NegotiationSession(DomainModel):
     event_sequence: Tuple[ProtocolEvent, ...] = ()
     phase: ProtocolPhase = ProtocolPhase.CREATED
     outcome: Optional[TerminalOutcome] = None
+    protocol_stage: ProtocolStage = ProtocolStage.BILATERAL
+    proposal_ownership: Tuple[ProposalOwnership, ...] = ()
+    votes: Tuple[OfferVote, ...] = ()
+    deliberation_actions: int = Field(default=0, ge=0)
+    revision_actions: int = Field(default=0, ge=0)
+    acceptance_semantics: Optional[AcceptanceSemantics] = None
 
-    @field_validator("participants", "offer_acceptances", "event_sequence", mode="before")
+    @field_validator(
+        "participants",
+        "offer_acceptances",
+        "event_sequence",
+        "proposal_ownership",
+        "votes",
+        mode="before",
+    )
     @classmethod
     def tuples_from_json_arrays(cls, value: Any) -> Any:
         return _list_to_tuple(value)
@@ -188,6 +272,47 @@ class NegotiationSession(DomainModel):
             raise ValueError("offer acceptances must belong to session participants")
         if self.latest_valid_offer is None and self.offer_acceptances:
             raise ValueError("offer acceptances require an outstanding offer")
+        if (
+            self.protocol_stage is ProtocolStage.BILATERAL
+            and self.acceptance_semantics is not None
+        ):
+            raise ValueError("bilateral sessions cannot contain multiparty acceptance semantics")
+        if (
+            self.protocol_stage is not ProtocolStage.BILATERAL
+            and self.acceptance_semantics is None
+        ):
+            raise ValueError("multiparty sessions require explicit acceptance semantics")
+        offer_ids = tuple(item.offer_id for item in self.proposal_ownership)
+        if len(set(offer_ids)) != len(offer_ids):
+            raise ValueError("proposal ownership must contain unique offer identifiers")
+        if any(item.owner_id not in self.participants for item in self.proposal_ownership):
+            raise ValueError("proposal owners must belong to session participants")
+        voter_ids = tuple(item.voter_id for item in self.votes)
+        if len(set(voter_ids)) != len(voter_ids):
+            raise ValueError("each eligible participant may vote at most once")
+        if any(item.voter_id not in self.participants for item in self.votes):
+            raise ValueError("voters must belong to session participants")
+        if self.acceptance_semantics is not None:
+            if not set(self.acceptance_semantics.eligible_voters).issubset(set(self.participants)):
+                raise ValueError("acceptance semantics contain a non-participant voter")
+            if any(
+                item.voter_id not in self.acceptance_semantics.eligible_voters
+                for item in self.votes
+            ):
+                raise ValueError("only eligible voters may appear in session votes")
+        if (self.protocol_stage is ProtocolStage.BILATERAL) != (
+            self.acceptance_semantics is None
+        ):
+            raise ValueError(
+                "only multiparty stages may carry acceptance semantics, and they must carry them"
+            )
+        if self.votes and self.protocol_stage is not ProtocolStage.VOTING:
+            raise ValueError("votes are valid only during the multiparty voting stage")
+        if self.votes and (
+            self.latest_valid_offer is None
+            or any(item.offer_id != self.latest_valid_offer.offer_id for item in self.votes)
+        ):
+            raise ValueError("votes must reference the outstanding offer")
         if self.phase in TERMINAL_PHASES:
             if self.outcome is None:
                 raise ValueError("terminal protocol phases require an outcome")
@@ -205,6 +330,21 @@ class NegotiationSession(DomainModel):
                 raise ValueError("terminal outcome round must match the session round")
             if self.phase is ProtocolPhase.AGREED and self.outcome.agreement.offer != self.latest_valid_offer:
                 raise ValueError("agreed outcome must reference the latest valid offer")
+            if self.phase is ProtocolPhase.AGREED:
+                accepted_by = set(self.outcome.agreement.accepted_by)
+                if accepted_by != set(self.offer_acceptances):
+                    raise ValueError("agreement acceptors must match session acceptances")
+                if self.protocol_stage is ProtocolStage.VOTING:
+                    approvals = {item.voter_id for item in self.votes if item.approve}
+                    if accepted_by != approvals:
+                        raise ValueError("multiparty agreement acceptors must match approval votes")
+                    semantics = self.acceptance_semantics
+                    if semantics is None:
+                        raise ValueError("multiparty agreement requires serialized acceptance semantics")
+                    if len(approvals) < semantics.approval_count:
+                        raise ValueError("multiparty agreement does not meet its approval quorum")
+                    if not set(semantics.required_participants).issubset(approvals):
+                        raise ValueError("multiparty agreement lacks required participant consent")
         else:
             if self.outcome is not None:
                 raise ValueError("non-terminal protocol phases cannot have an outcome")
@@ -228,6 +368,20 @@ class NegotiationSession(DomainModel):
             )
             if final_round != self.round_number:
                 raise ValueError("final event round must match the session round")
+            if self.protocol_stage is not ProtocolStage.BILATERAL:
+                event_owners = {
+                    event.action.offer.offer_id: event.action.actor_id
+                    for event in self.event_sequence
+                    if isinstance(event, ActionAppliedEvent)
+                    and isinstance(event.action, (ProposeAction, CounterAction))
+                }
+                recorded_owners = {
+                    item.offer_id: item.owner_id for item in self.proposal_ownership
+                }
+                if recorded_owners != event_owners:
+                    raise ValueError(
+                        "multiparty proposal ownership must match proposal events"
+                    )
         return self
 
 

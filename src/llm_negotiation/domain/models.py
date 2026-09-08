@@ -465,14 +465,14 @@ class NegotiationScenario(DomainModel):
             self.validate_offer(action.offer)
         return action
 
-    def validate_agreement(self, agreement: Agreement) -> Agreement:
+    def validate_agreement(self, agreement: Agreement, *, require_all: bool = True) -> Agreement:
         self.validate_offer(agreement.offer)
         scenario_participants = {participant.participant_id for participant in self.participants}
         unknown = set(agreement.accepted_by) - scenario_participants
         if unknown:
             names = ", ".join(sorted(str(participant_id) for participant_id in unknown))
             raise OutcomeValidationError(f"agreement contains unknown participants: {names}")
-        if set(agreement.accepted_by) != scenario_participants:
+        if require_all and set(agreement.accepted_by) != scenario_participants:
             raise OutcomeValidationError("agreement must be accepted by every scenario participant")
         return agreement
 

@@ -494,7 +494,10 @@ def evaluate_episode(
     offer = agreement.offer if agreement is not None else None
     if agreement is not None:
         try:
-            input.scenario.validate_agreement(agreement)
+            input.scenario.validate_agreement(
+                agreement,
+                require_all=input.session.acceptance_semantics is None,
+            )
             valid = True
         except ValueError:
             valid = False

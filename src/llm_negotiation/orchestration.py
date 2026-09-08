@@ -370,11 +370,7 @@ def _memory_reference(snapshot: MemorySnapshot) -> AgentMemoryReference:
 
 
 class NegotiationOrchestrator:
-    """Deterministic bilateral lifecycle coordinator over injected components.
-
-    Protocol transitions remain authoritative. The participant ordering is the extension point for
-    future multiparty turn protocols; this implementation intentionally requires two participants.
-    """
+    """Deterministic lifecycle coordinator over injected bilateral or multiparty protocols."""
 
     def __init__(
         self,
@@ -578,7 +574,8 @@ class NegotiationOrchestrator:
         mediation_handled_at = set()
         stop_reason = EpisodeStopReason.TERMINAL_OUTCOME
 
-        self._update_all_memories(protocol, state)
+        if not hasattr(protocol, "independent_initial_view"):
+            self._update_all_memories(protocol, state)
         while state.phase not in TERMINAL_PHASES:
             elapsed = self.clock.monotonic() - started
             if elapsed >= config.episode_timeout_seconds or action_count >= config.action_limit:
@@ -676,6 +673,7 @@ class NegotiationOrchestrator:
             actor_id = state.current_turn
             if actor_id is None:
                 raise OrchestrationError("non-terminal protocol state has no current actor")
+            self._prepare_independent_observation(protocol, state, actor_id)
             memory = self._observe(protocol, state, actor_id)
             policy = self.policies[actor_id]
             if (
@@ -709,6 +707,7 @@ class NegotiationOrchestrator:
             if action_elapsed >= config.action_timeout_seconds:
                 candidate = self._budget_failure(state, actor_id, "Per-action timeout reached.")
 
+            state_before_transition = state
             verified = executor.submit(
                 state,
                 self.profiles[actor_id],
@@ -727,8 +726,12 @@ class NegotiationOrchestrator:
             selected = verified.verification.action
             state = verified.transition.state
             action_count += 1
-            self._deliver_action_message(selected, verified.transition.events[0])
-            self._update_all_memories(protocol, state)
+            self._deliver_action_message(
+                selected,
+                verified.transition.events[0],
+                critique=(state_before_transition.protocol_stage.value == "deliberation"),
+            )
+            self._update_memories_after_transition(protocol, state)
             self._update_external_beliefs(state, beliefs)
 
             if (
@@ -811,11 +814,12 @@ class NegotiationOrchestrator:
     def _observe(
         self, protocol: NegotiationProtocol, state: NegotiationSession, actor_id: ParticipantId
     ) -> MemorySnapshot:
+        visible_state = self._participant_protocol_view(protocol, state, actor_id)
         snapshot = self.memory_store.get(actor_id).snapshot()
         if (
-            snapshot.working.negotiation_id != state.scenario_id
-            or snapshot.working.public_event_count != len(state.event_sequence)
-            or snapshot.working.current_turn != state.current_turn
+            snapshot.working.negotiation_id != visible_state.scenario_id
+            or snapshot.working.public_event_count != len(visible_state.event_sequence)
+            or snapshot.working.current_turn != visible_state.current_turn
             or snapshot.working.last_visible_message_sequence
             != max(
                 (item.sequence_number for item in self.message_bus.inbox(actor_id)),
@@ -823,9 +827,54 @@ class NegotiationOrchestrator:
             )
         ):
             raise OrchestrationError("participant memory is not synchronized with public state")
-        if snapshot.working.legal_actions != protocol.legal_action_types(state, actor_id):
+        if snapshot.working.legal_actions != protocol.legal_action_types(visible_state, actor_id):
             raise OrchestrationError("participant memory contains stale legal actions")
         return snapshot
+
+    @staticmethod
+    def _participant_protocol_view(
+        protocol: NegotiationProtocol,
+        state: NegotiationSession,
+        actor_id: ParticipantId,
+    ) -> NegotiationSession:
+        projector = getattr(protocol, "independent_initial_view", None)
+        return projector(state, actor_id) if projector is not None else state
+
+    def _prepare_independent_observation(
+        self,
+        protocol: NegotiationProtocol,
+        state: NegotiationSession,
+        actor_id: ParticipantId,
+    ) -> None:
+        projector = getattr(protocol, "independent_initial_view", None)
+        if projector is None:
+            return
+        visible_state = projector(state, actor_id)
+        if visible_state is state:
+            return
+        self.memory_store.get(actor_id).update(
+            AgentObservation(
+                scenario=self.scenario,
+                session=visible_state,
+                own_profile=self.profiles[actor_id],
+            ),
+            legal_actions=protocol.legal_action_types(visible_state, actor_id),
+            visible_messages=(),
+            active_plan=("Create an independent initial proposal.",),
+        )
+
+    def _update_memories_after_transition(
+        self, protocol: NegotiationProtocol, state: NegotiationSession
+    ) -> None:
+        from .protocol import ProtocolStage
+
+        if (
+            hasattr(protocol, "independent_initial_view")
+            and state.protocol_stage is ProtocolStage.INDEPENDENT_PROPOSALS
+            and state.phase not in TERMINAL_PHASES
+        ):
+            return
+        self._update_all_memories(protocol, state)
 
     def _update_all_memories(
         self, protocol: NegotiationProtocol, state: NegotiationSession
@@ -920,7 +969,13 @@ class NegotiationOrchestrator:
             ),
         )
 
-    def _deliver_action_message(self, action: NegotiationAction, event: ProtocolEvent) -> None:
+    def _deliver_action_message(
+        self,
+        action: NegotiationAction,
+        event: ProtocolEvent,
+        *,
+        critique: bool = False,
+    ) -> None:
         if isinstance(action, MessageAction):
             all_other_bus_participants = tuple(
                 item for item in self.message_bus.participants if item != action.actor_id
@@ -930,7 +985,7 @@ class NegotiationOrchestrator:
                 sender=action.actor_id,
                 recipients=all_other_bus_participants if public else action.recipients,
                 timestamp=self.clock.now(),
-                message_type=MessageType.INTENT_SIGNAL,
+                message_type=(MessageType.CRITIQUE if critique else MessageType.INTENT_SIGNAL),
                 visibility=(
                     MessageVisibility.PUBLIC if public else MessageVisibility.DIRECT_PRIVATE
                 ),

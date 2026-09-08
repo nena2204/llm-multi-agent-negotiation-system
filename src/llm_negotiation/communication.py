@@ -382,4 +382,101 @@ def format_transcript(
     return "\n".join(format_message(message, participant_names) for message in messages)
 
 
+class TranscriptSummaryItem(DomainModel):
+    content: str = Field(min_length=1, max_length=4000)
+    source_event_ids: Tuple[str, ...] = Field(min_length=1)
+    summarized: bool
+
+    @field_validator("source_event_ids", mode="before")
+    @classmethod
+    def source_ids_from_json(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+
+class TranscriptSummary(DomainModel):
+    items: Tuple[TranscriptSummaryItem, ...]
+    source_message_count: int = Field(ge=0)
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def items_from_json(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def sources_are_preserved(self) -> "TranscriptSummary":
+        source_count = sum(len(item.source_event_ids) for item in self.items)
+        if source_count != self.source_message_count:
+            raise ValueError("transcript summary must preserve one source id per message")
+        return self
+
+
+def summarize_transcript(
+    messages: Iterable[MessageEnvelope],
+    *,
+    maximum_items: int = 8,
+    maximum_characters: int = 2000,
+) -> TranscriptSummary:
+    """Deterministically compact a visible transcript while retaining source event ids."""
+
+    ordered = tuple(sorted(messages, key=lambda item: item.sequence_number))
+    if maximum_items < 1:
+        raise ValueError("maximum_items must be positive")
+    if maximum_characters < 64:
+        raise ValueError("maximum_characters must be at least 64")
+    if maximum_items > maximum_characters:
+        raise ValueError("maximum_items cannot exceed the character budget")
+
+    def bound_contents(
+        items: Tuple[TranscriptSummaryItem, ...]
+    ) -> Tuple[TranscriptSummaryItem, ...]:
+        remaining = maximum_characters
+        bounded = []
+        for index, item in enumerate(items):
+            items_left = len(items) - index
+            allowance = max(1, remaining // items_left)
+            content = item.content[:allowance]
+            bounded.append(item.model_copy(update={"content": content}))
+            remaining -= len(content)
+        return tuple(bounded)
+
+    def source_id(message: MessageEnvelope) -> str:
+        return str(message.referenced_action_id or message.correlation_id)
+
+    if len(ordered) <= maximum_items:
+        items = tuple(
+            TranscriptSummaryItem(
+                content=format_message(message)[:maximum_characters],
+                source_event_ids=(source_id(message),),
+                summarized=False,
+            )
+            for message in ordered
+        )
+        return TranscriptSummary(items=bound_contents(items), source_message_count=len(ordered))
+
+    recent_count = max(0, maximum_items - 1)
+    compacted = ordered[:-recent_count] if recent_count else ordered
+    recent = ordered[-recent_count:] if recent_count else ()
+    source_ids = tuple(source_id(message) for message in compacted)
+    senders = ", ".join(dict.fromkeys(str(message.sender) for message in compacted))
+    summary_text = (
+        f"{len(compacted)} earlier messages from {senders}; "
+        f"types: {', '.join(message.message_type.value for message in compacted)}."
+    )[:maximum_characters]
+    items = (
+        TranscriptSummaryItem(
+            content=summary_text,
+            source_event_ids=source_ids,
+            summarized=True,
+        ),
+    ) + tuple(
+        TranscriptSummaryItem(
+            content=format_message(message)[:maximum_characters],
+            source_event_ids=(source_id(message),),
+            summarized=False,
+        )
+        for message in recent
+    )
+    return TranscriptSummary(items=bound_contents(items), source_message_count=len(ordered))
+
+
 _MESSAGE_SEQUENCE_ADAPTER = TypeAdapter(Tuple[MessageEnvelope, ...])

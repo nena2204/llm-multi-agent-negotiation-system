@@ -17,6 +17,8 @@ __all__ = [
     "mediation",
     "evaluation",
     "orchestration",
+    "multiparty",
+    "team_experiment",
     "manager",
     "judge",
     "learning",
