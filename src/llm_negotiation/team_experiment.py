@@ -83,7 +83,7 @@ class _ExperimentClock:
         return 0.0
 
 
-def _scenario_and_profiles(
+def team_scenario_and_profiles(
     size: int, composition: TeamComposition
 ) -> tuple[NegotiationScenario, Mapping[ParticipantId, AgentProfile]]:
     participants = tuple(
@@ -181,7 +181,7 @@ def _policies(
 
 
 def _run(size: int, composition: TeamComposition) -> TeamExperimentRun:
-    scenario, profiles = _scenario_and_profiles(size, composition)
+    scenario, profiles = team_scenario_and_profiles(size, composition)
     participant_ids = tuple(item.participant_id for item in scenario.participants)
     policies = _policies(scenario.participants, composition, size >= 3)
     memories = {

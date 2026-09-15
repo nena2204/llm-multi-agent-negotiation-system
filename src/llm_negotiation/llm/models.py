@@ -65,6 +65,9 @@ class ModelConfiguration(LLMModel):
     provider: LLMProvider
     model: str = Field(min_length=1, max_length=200)
     timeout_seconds: float = Field(default=30.0, gt=0.0, le=600.0)
+    temperature: Optional[float] = Field(
+        default=None, ge=0.0, le=2.0, allow_inf_nan=False
+    )
     max_output_tokens: Optional[int] = Field(default=None, ge=1)
     retry: RetryConfiguration = Field(default_factory=RetryConfiguration)
 

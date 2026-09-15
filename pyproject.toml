@@ -17,6 +17,7 @@ ui = ["streamlit>=1.30,<2"]
 
 [project.scripts]
 llm-negotiation = "llm_negotiation.cli:main"
+llm-negotiation-experiment = "llm_negotiation.experiment_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

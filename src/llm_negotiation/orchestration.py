@@ -55,7 +55,7 @@ from .mediation import (
     MediatorConfiguration,
     MediatorContext,
 )
-from .memory import AgentMemory, AgentObservation, AgentProfile, MemorySnapshot
+from .memory import AgentMemory, AgentObservation, AgentProfile, MemoryError, MemorySnapshot
 from .opponent import OpponentModeller, evidence_from_memory
 from .policies import LinearConcessionPolicy, NegotiationPolicy
 from .protocol import (
@@ -1064,7 +1064,13 @@ class NegotiationOrchestrator:
 
     def _update_external_beliefs(self, state: NegotiationSession, beliefs: dict) -> None:
         for observer_id, modeller in self.opponent_modellers.items():
-            snapshot = self.memory_store.get(observer_id).snapshot()
+            try:
+                snapshot = self.memory_store.get(observer_id).snapshot()
+            except MemoryError:
+                # Multiparty independent proposals intentionally keep later speakers'
+                # memories uninitialized until their sealed initial turn. There is no
+                # participant-visible evidence from which to update a belief yet.
+                continue
             for opponent_id in self._other_participants(observer_id):
                 key = (observer_id, opponent_id)
                 belief = modeller.update(

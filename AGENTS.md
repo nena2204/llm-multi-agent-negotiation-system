@@ -18,6 +18,11 @@
 - `src/llm_negotiation/evaluation.py`: authoritative metrics and separate qualitative judge reports.
 - `src/llm_negotiation/learning.py`: versioned contextual-bandit strategy learning and rewards.
 - `src/llm_negotiation/learning_experiment.py`: deterministic learning-curve experiment runner.
+- `src/llm_negotiation/experiment_dataset.py`: versioned offline scenario dataset.
+- `src/llm_negotiation/experiment_components.py`: labelled component capability evaluations.
+- `src/llm_negotiation/experiments.py`: reproducible runner, statistics, exports, and SVG plots.
+- `src/llm_negotiation/experiment_cli.py`: offline run and artifact-rebuild commands.
+- `experiment_configs/`: checked-in versioned experiment configurations.
 - `src/llm_negotiation/orchestration.py`: dependency-injected episode lifecycle and replay.
 - `src/llm_negotiation/multiparty.py`: staged group protocol, coalition rules, and three-party scenario.
 - `src/llm_negotiation/team_experiment.py`: deterministic size/composition comparison experiment.
@@ -34,6 +39,7 @@ python -m pip install -e ".[dev]"
 pytest -q
 llm-negotiation
 python -m llm_negotiation.cli
+llm-negotiation-experiment offline --output artifacts/offline-small
 ```
 
 Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and run it with
@@ -56,6 +62,7 @@ Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and ru
 - Keep mediator suggestions non-binding, privacy-mode scoped, and separate from participant actions.
 - Keep deterministic evaluation authoritative and qualitative judge outputs separate and model-labelled.
 - Update strategy learners only between completed training episodes; evaluation mode remains frozen.
+- Preserve raw experiment episodes, record every failed cell, and keep training/evaluation partitions separate.
 - Keep independent multiparty proposals sealed until initialization completes; required voters retain consent rights.
 - Validate public inputs and add focused tests for behavioral changes.
 - Keep runtime dependencies minimal and separate optional/development dependencies.

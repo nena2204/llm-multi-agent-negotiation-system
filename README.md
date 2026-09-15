@@ -416,6 +416,88 @@ two no-deal episodes; Boulware, linear, and conceder arms each produced agreemen
 and the frozen tie-break selected Boulware. This is a fixture-specific learning curve that exposes
 state changes and reproducibility, not evidence of general strategy superiority or generalization.
 
+## Reproducible experiment harness
+
+The versioned harness in `llm_negotiation.experiments` separates final negotiation outcomes from
+component capability tests and training-only learning curves. The built-in scenario dataset covers
+feasible and infeasible bargaining regions, symmetric and asymmetric preferences, price-only and
+multi-issue negotiations, and a three-principal multiparty case. Every configuration records the
+scenario set, policy/model baselines, seed set, maximum rounds, each model and temperature, execution and
+token budgets, dataset version, and enabled components. Its SHA-256 configuration hash identifies
+the complete configuration.
+
+The supported baselines are deterministic policies, one structured LLM policy, independent
+sample-and-vote, homogeneous teams, and heterogeneous teams. The default LLM baseline uses the
+provider-independent structured fake and remains fully offline. Sample-and-vote independently asks
+Boulware, linear, and conceder policies for typed actions and uses deterministic action-type majority
+voting. A single-LLM policy is explicitly marked not applicable for multiparty cases rather than
+being silently omitted.
+
+`EnabledComponents` provides one-factor ablations for memory, Theory of Mind, deterministic
+pre-verification, mediation, substantive communication, team size (2/3/4), deliberation depth, and
+belief-confidence visibility. `one_at_a_time_ablation_configurations()` produces the complete matrix.
+Memory-off retains only protocol-critical bounded working state; communication-off emits a neutral
+protocol critique without sharing substantive reasoning; verifier-off still leaves the protocol
+state machine authoritative. ToM is updated only from observable bilateral evidence, while its
+separate labelled calibration set also supports multiparty research without exposing private truth
+during an episode.
+
+Run the full one-factor matrix explicitly (it is intentionally excluded from default CI):
+
+```powershell
+llm-negotiation-experiment ablate --config experiment_configs/offline-small.json --output artifacts/ablations
+```
+
+Run the checked-in small configuration without network access:
+
+```powershell
+llm-negotiation-experiment offline --config experiment_configs/offline-small.json --output artifacts/offline-small --timestamp 2026-01-01T00:00:00+00:00
+```
+
+The explicit timestamp makes complete artifacts byte-reproducible for the same commit, Python
+environment, configuration, and seed. Omitting it records the current UTC run time. Larger offline
+runs require an explicit configuration passed to the same command. Provider-backed runs are never
+selected by default and require both the optional provider installation/configuration and the
+explicit command below; missing credentials fail before an API request:
+
+```powershell
+llm-negotiation-experiment live --config path\to\live-config.json --output artifacts/live-run
+```
+
+Each run produces:
+
+- `episodes.jsonl`: every successful, failed, or explicitly non-applicable cell. Successful rows
+  preserve the full serializable `EpisodeResult`; failure messages are sanitized.
+- `aggregate.csv`: configuration hash, Git commit, timestamp, seeds, model/temperature, counts,
+  metric means, and 95% confidence intervals.
+- `paired_comparisons.csv`: paired mean differences for baselines evaluated on identical
+  scenario/seed cells.
+- `ablation_table.csv`: component settings and outcome metrics, reproducible from raw JSONL.
+- `component_evaluations.jsonl`: separately labelled environment-comprehension, opponent-inference,
+  calibration, next-action, and joint-planning cases.
+- `learning_curve_training.json`: an explicitly separate training partition that is never included
+  in final evaluation aggregates.
+- `plots/*.svg`: agreement, utility/welfare, fairness, rounds, invalid actions, latency,
+  usage/estimated cost, and learning curves.
+- `manifest.json`: the full configuration, configuration hash, commit, timestamp, partition names,
+  statistical method, and artifact index.
+
+Rebuild aggregate and ablation tables solely from preserved raw results:
+
+```powershell
+llm-negotiation-experiment rebuild artifacts/offline-small/episodes.jsonl `
+  --aggregate artifacts/offline-small/aggregate-rebuilt.csv `
+  --ablation artifacts/offline-small/ablation-rebuilt.csv
+```
+
+Confidence intervals use a two-sided 95% normal approximation around the arithmetic mean. A single
+observation receives a zero-width descriptive interval; paired comparisons calculate within-cell
+differences before their interval. These methods are transparent and dependency-free, but very
+small samples do not justify population-level conclusions. In particular, do not conclude that an
+agentic feature, larger team, or model is superior from the smoke benchmark, and never treat an LLM
+judge score, persuasive transcript, or majority vote as a substitute for authoritative validity,
+utility, Pareto, fairness, and calibration metrics.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install

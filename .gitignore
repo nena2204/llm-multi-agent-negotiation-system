@@ -12,3 +12,4 @@ pytest-cache-files-*/
 .idea/
 .vscode/
 *.log
+artifacts/

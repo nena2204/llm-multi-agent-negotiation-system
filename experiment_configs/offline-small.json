@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "experiment_id": "offline-small-v1",
+  "dataset_version": "1.0",
+  "scenario_ids": [
+    "price-feasible-symmetric",
+    "price-infeasible",
+    "multi-issue-asymmetric",
+    "three-principal-resource-allocation"
+  ],
+  "baselines": [
+    "deterministic",
+    "single_llm",
+    "independent_sample_and_vote",
+    "homogeneous_team",
+    "heterogeneous_team"
+  ],
+  "deterministic_policy_names": ["linear", "boulware"],
+  "models": [
+    {
+      "provider": "fake",
+      "model": "offline-structured-fake-v1",
+      "temperature": 0.0,
+      "timeout_seconds": 5.0
+    }
+  ],
+  "seeds": [7],
+  "rounds": 6,
+  "budgets": {
+    "episode_timeout_seconds": 30.0,
+    "action_timeout_seconds": 10.0,
+    "maximum_model_calls": 100,
+    "maximum_actions": null,
+    "maximum_total_tokens": 100000,
+    "estimated_cost_per_1k_tokens": 0.0
+  },
+  "enabled_components": {
+    "memory": true,
+    "theory_of_mind": true,
+    "verifier": true,
+    "mediator": false,
+    "communication": true,
+    "team_size": null,
+    "deliberation_depth": 1,
+    "confidence_visibility": true
+  },
+  "evaluation_partition": "evaluation"
+}

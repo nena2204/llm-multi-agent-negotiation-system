@@ -90,6 +90,25 @@ def _optional_environment_int(
         ) from error
 
 
+def _optional_environment_float(
+    environment: Mapping[str, str], name: str
+) -> Optional[float]:
+    raw = environment.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError as error:
+        raise LLMConfigurationError(
+            LLMErrorInfo(
+                code=LLMErrorCode.CONFIGURATION,
+                message=f"{name} must be a number",
+                retryable=False,
+                provider=LLMProvider.OPENAI,
+            )
+        ) from error
+
+
 def load_openai_model_configuration(
     environment: Optional[Mapping[str, str]] = None,
 ) -> ModelConfiguration:
@@ -114,6 +133,7 @@ def load_openai_model_configuration(
             provider=LLMProvider.OPENAI,
             model=model,
             timeout_seconds=_environment_float(values, "OPENAI_TIMEOUT_SECONDS", 30.0),
+            temperature=_optional_environment_float(values, "OPENAI_TEMPERATURE"),
             max_output_tokens=_optional_environment_int(values, "OPENAI_MAX_OUTPUT_TOKENS"),
             retry=retry,
         )
@@ -243,6 +263,8 @@ class OpenAILLMClient(RetryingLLMClient):
             }
             if configuration.max_output_tokens is not None:
                 arguments["max_output_tokens"] = configuration.max_output_tokens
+            if configuration.temperature is not None:
+                arguments["temperature"] = configuration.temperature
             response = client.responses.create(**arguments)
         except LLMClientError:
             raise

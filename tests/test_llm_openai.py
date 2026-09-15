@@ -60,7 +60,7 @@ def sdk_response():
     )
 
 
-def openai_request(max_retries=0):
+def openai_request(max_retries=0, temperature=None):
     return LLMRequest(
         request_id="openai-request",
         messages=(
@@ -71,6 +71,7 @@ def openai_request(max_retries=0):
             provider=LLMProvider.OPENAI,
             model="configured-model",
             timeout_seconds=12.5,
+            temperature=temperature,
             max_output_tokens=100,
             retry=RetryConfiguration(max_retries=max_retries),
         ),
@@ -107,6 +108,14 @@ def test_mocked_openai_adapter_uses_responses_api_and_common_response_type():
     ]
 
 
+def test_openai_adapter_forwards_explicit_experiment_temperature():
+    sdk = MockSDKClient((sdk_response(),))
+    OpenAILLMClient(sdk, clock=lambda: 0.0).generate(
+        openai_request(temperature=0.4)
+    )
+    assert sdk.responses.calls[0]["temperature"] == 0.4
+
+
 def test_missing_credentials_are_actionable_without_importing_sdk():
     with pytest.raises(LLMConfigurationError, match="OPENAI_API_KEY is required") as exc_info:
         OpenAILLMClient.from_env(environment={})
@@ -120,6 +129,7 @@ def test_model_configuration_loads_separately_from_agent_configuration():
         {
             "OPENAI_MODEL": "configured-model",
             "OPENAI_TIMEOUT_SECONDS": "15",
+            "OPENAI_TEMPERATURE": "0.3",
             "OPENAI_MAX_OUTPUT_TOKENS": "250",
             "OPENAI_MAX_RETRIES": "3",
             "OPENAI_RETRY_INITIAL_BACKOFF_SECONDS": "0.5",
@@ -131,6 +141,7 @@ def test_model_configuration_loads_separately_from_agent_configuration():
     assert configuration.provider is LLMProvider.OPENAI
     assert configuration.model == "configured-model"
     assert configuration.timeout_seconds == 15.0
+    assert configuration.temperature == 0.3
     assert configuration.retry.max_retries == 3
     assert "persona" not in type(configuration).model_fields
     assert "preferences" not in type(configuration).model_fields
