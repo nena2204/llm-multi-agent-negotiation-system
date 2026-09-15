@@ -380,6 +380,42 @@ mean outcome utility (for a size-aware comparison), and independent-proposal div
 experimental observations and deliberately makes no claim that diversity or team size is always
 beneficial.
 
+
+## Between-episode strategy learning
+
+`llm_negotiation.learning` provides transparent contextual-bandit learners over a registered set
+of negotiation strategies. Epsilon-greedy selects the highest empirical mean reward, with seeded
+probability epsilon selecting a registered arm uniformly. UCB selects every unobserved arm once,
+then maximizes `mean_reward + c * sqrt(log(total_observations) / arm_observations)`. Hash-derived
+seeded choices make behavior reproducible across save/reload without serializing an opaque random
+generator.
+
+The context contains only public scenario structure and the learner's own profile: participant and
+issue counts, public issue identifiers and types, the learner's role/persona presence, and bucketed
+own issue weights, preference directions, reservation utility, and BATNA. Scenario IDs, opponent
+identities, messages, behavior, and opponent preferences are excluded, so equivalent contexts can
+share statistics without leaking private opponent state.
+
+The configurable reward is
+`R = 0.50 * own_utility + 0.20 * valid_agreement + 0.15 * efficiency + 0.10 * fairness - 0.05 * cost`
+by default. Own utility is the authoritative participant outcome utility; efficiency is
+`max(0, 1 - Pareto_distance / sqrt(participant_count))` when a valid agreement and tractable Pareto
+frontier are available; fairness is utility balance; and cost is the mean of separately capped
+message-count/100, model-call-count/20, and latency/60000-ms ratios. All five weights and three cost
+scales are explicit `RewardConfiguration` fields and need not sum to one.
+
+Only a completed terminal episode can update arm counts and rewards. Training selections create a
+pending observation that must be resolved exactly once. Evaluation mode performs deterministic
+greedy selection without exploration or state mutation, and rejects outcome updates. Learner files
+are versioned JSON written atomically through a same-directory temporary file and `os.replace`;
+invalid JSON, incompatible versions, and wrong algorithm subclasses fail explicitly.
+
+`run_learning_curve_experiment()` supplies a small seeded demonstration against a fixed linear
+seller. With 12 episodes, seed 23, and epsilon 0.25, the fixed buyer arm received reward 0.440 in
+two no-deal episodes; Boulware, linear, and conceder arms each produced agreements and reward 0.814,
+and the frozen tie-break selected Boulware. This is a fixture-specific learning curve that exposes
+state changes and reproducibility, not evidence of general strategy superiority or generalization.
+
 ## Setup
 
 Python 3.9 or newer is required. From the repository root, create a virtual environment and install

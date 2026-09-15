@@ -17,7 +17,7 @@ from .domain import (
 )
 from .domain.legacy import BUYER_ID, PRICE_ISSUE_ID, SELLER_ID
 from .judge import Judge
-from .learning import LearningAgent
+from .learning import LegacyRewardScorer
 from .mediation import DeadlockConfiguration, MediatorConfiguration
 from .memory import AgentProfile, MemorySnapshot, PublicAgentIdentity
 from .orchestration import NegotiationOrchestrator, OrchestratorConfiguration
@@ -244,7 +244,7 @@ class NegotiationManager:
             seller=self.seller,
             rounds_used=rounds_used,
         )
-        reward = LearningAgent().score_result(evaluation)
+        reward = LegacyRewardScorer().score_result(evaluation)
         return {
             "product": self.product_name,
             "history": self.history,

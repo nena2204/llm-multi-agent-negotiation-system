@@ -22,6 +22,7 @@ __all__ = [
     "manager",
     "judge",
     "learning",
+    "learning_experiment",
     "utils",
     "cli",
     "ui_streamlit",
