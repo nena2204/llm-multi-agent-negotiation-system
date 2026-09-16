@@ -700,21 +700,35 @@ class MediationService:
         message_bus: MessageBus,
         timestamp: datetime,
     ) -> MediatedTransition:
-        transition = protocol.apply_mediator_intervention(state, intervention)
-        event = transition.events[0]
         message_type = {
             MediatorInterventionKind.PROPOSAL: MessageType.MEDIATOR_PROPOSAL,
             MediatorInterventionKind.CLARIFYING_QUESTION: MessageType.MEDIATOR_QUESTION,
             MediatorInterventionKind.REFUSAL: MessageType.MEDIATOR_NOTICE,
         }[intervention.kind]
         content = intervention.question or intervention.public_explanation
+        recipients = tuple(
+            participant_id
+            for participant_id in message_bus.participants
+            if participant_id != intervention.mediator_id
+        )
+        # Untrusted model-authored mediator text must pass the message boundary
+        # before the intervention can mutate protocol state.
+        message_bus.preflight(
+            sender=intervention.mediator_id,
+            recipients=recipients,
+            timestamp=timestamp,
+            message_type=message_type,
+            visibility=MessageVisibility.PUBLIC,
+            content=content,
+            referenced_offer_id=(
+                intervention.offer.offer_id if intervention.offer is not None else None
+            ),
+        )
+        transition = protocol.apply_mediator_intervention(state, intervention)
+        event = transition.events[0]
         message = message_bus.send(
             sender=intervention.mediator_id,
-            recipients=tuple(
-                participant_id
-                for participant_id in message_bus.participants
-                if participant_id != intervention.mediator_id
-            ),
+            recipients=recipients,
             timestamp=timestamp,
             message_type=message_type,
             visibility=MessageVisibility.PUBLIC,

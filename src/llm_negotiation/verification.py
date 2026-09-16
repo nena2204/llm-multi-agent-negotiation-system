@@ -946,10 +946,16 @@ class VerifiedProtocolExecutor:
     """Only calls the protocol after bounded verification has selected an action."""
 
     def __init__(
-        self, protocol: NegotiationProtocol, coordinator: VerificationCoordinator
+        self,
+        protocol: NegotiationProtocol,
+        coordinator: VerificationCoordinator,
+        pre_transition_guard: Optional[
+            Callable[[NegotiationSession, NegotiationAction], None]
+        ] = None,
     ) -> None:
         self.protocol = protocol
         self.coordinator = coordinator
+        self.pre_transition_guard = pre_transition_guard
 
     def submit(
         self,
@@ -971,5 +977,7 @@ class VerifiedProtocolExecutor:
             authorized_communication_recipients=authorized_communication_recipients,
         )
         resolution = self.coordinator.resolve(context, candidate, correction_provider)
+        if self.pre_transition_guard is not None:
+            self.pre_transition_guard(state, resolution.action)
         transition = self.protocol.transition(state, resolution.action)
         return VerifiedTransition(transition=transition, verification=resolution)

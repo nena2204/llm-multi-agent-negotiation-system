@@ -7,6 +7,7 @@ __all__ = [
     "policies",
     "benchmark",
     "communication",
+    "safety",
     "memory",
     "llm",
     "llm_policy",

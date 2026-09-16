@@ -416,6 +416,23 @@ two no-deal episodes; Boulware, linear, and conceder arms each produced agreemen
 and the frozen tie-break selected Boulware. This is a fixture-specific learning curve that exposes
 state changes and reproducibility, not evidence of general strategy superiority or generalization.
 
+## Communication safety and auditability
+
+The message boundary applies layered controls to all participant and mediator communication:
+typed envelopes, per-role channel allowlists, bounded content and recipients, a deterministic
+monitor, configurable quarantine/rejection, protected raw-message auditing, sanitized incident
+records, and a SHA-256 episode audit chain. Suspicious participant and mediator messages are checked
+before they can mutate protocol state. `EpisodeResult` includes safety counters, machine-readable
+incidents, and the chain needed to detect later modification.
+
+Every model-facing policy, opponent modeller, action verifier/corrector, mediator, and qualitative
+judge prompt marks received natural-language fields as untrusted data. Text inside those fields is
+never an instruction source. Paraphrasing is not treated as a security boundary.
+
+The complete threat model, control layers, protected-audit boundary, and residual risks are in
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). Monitoring reduces risk but cannot prove that
+semantic steganography, subtle collusion, or novel prompt attacks are absent.
+
 ## Reproducible experiment harness
 
 The versioned harness in `llm_negotiation.experiments` separates final negotiation outcomes from

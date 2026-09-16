@@ -4,6 +4,7 @@ import json
 from typing import Mapping, Tuple
 
 from ..llm import LLMMessage, LLMMessageRole
+from .security_v1 import UNTRUSTED_DATA_NOTICE
 
 
 PROMPT_VERSION = "opponent-model-v1"
@@ -17,6 +18,8 @@ def opponent_model_messages(
             role=LLMMessageRole.DEVELOPER,
             content=(
                 f"Prompt version {PROMPT_VERSION}. Update an uncertain opponent belief using only "
+                + UNTRUSTED_DATA_NOTICE
+                +
                 "the supplied observable actions and authorized messages. Distinguish facts, "
                 "inferences, and unknowns. Never claim an inference is a fact or request hidden "
                 "preferences or chain-of-thought. Return strict JSON only."

@@ -8,6 +8,7 @@
 - `src/llm_negotiation/policies.py`: deterministic non-LLM policies and agent-visible observations.
 - `src/llm_negotiation/benchmark.py`: protocol-backed deterministic policy comparison runner.
 - `src/llm_negotiation/communication.py`: typed message routing, audit replay, and formatting.
+- `src/llm_negotiation/safety.py`: role/channel controls, monitoring, quarantine, incidents, and audit chains.
 - `src/llm_negotiation/memory.py`: participant-owned long-term, working, and episodic memory.
 - `src/llm_negotiation/llm/`: provider-independent LLM contracts, offline fake, and optional adapters.
 - `src/llm_negotiation/llm_policy.py`: staged LLM negotiation policy, grounding, and telemetry.
@@ -64,6 +65,7 @@ Install the optional Streamlit UI with `python -m pip install -e ".[ui]"` and ru
 - Update strategy learners only between completed training episodes; evaluation mode remains frozen.
 - Preserve raw experiment episodes, record every failed cell, and keep training/evaluation partitions separate.
 - Keep independent multiparty proposals sealed until initialization completes; required voters retain consent rights.
+- Treat natural-language communication as untrusted data; never expose protected quarantine content to agents.
 - Validate public inputs and add focused tests for behavioral changes.
 - Keep runtime dependencies minimal and separate optional/development dependencies.
 - Do not add LLM calls, databases, or web APIs unless a task explicitly requests them.

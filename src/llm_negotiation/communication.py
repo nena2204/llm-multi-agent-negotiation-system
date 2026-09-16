@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Tuple
 
 from pydantic import Field, TypeAdapter, field_validator, model_validator
 
@@ -25,6 +25,14 @@ from .protocol import (
     NegotiationSession,
     ProtocolEvent,
 )
+
+if TYPE_CHECKING:
+    from .safety import (
+        CommunicationSafetyController,
+        ProtectedMessageRecord,
+        SafetyMetrics,
+        SecurityIncident,
+    )
 
 
 SYSTEM_SENDER = ParticipantId("system")
@@ -112,6 +120,7 @@ class MessageBus:
         participants: Tuple[ParticipantId, ...],
         mediator_ids: Tuple[ParticipantId, ...],
         audit_reader_ids: Tuple[ParticipantId, ...],
+        safety_controller: Optional["CommunicationSafetyController"] = None,
     ) -> None:
         if not negotiation_id or not negotiation_id.strip():
             raise ValueError("negotiation_id must not be blank")
@@ -131,6 +140,21 @@ class MessageBus:
         self.participants = tuple(participants)
         self.mediator_ids = tuple(mediator_ids)
         self.audit_reader_ids = tuple(audit_reader_ids)
+        if safety_controller is None:
+            from .safety import CommunicationSafetyController
+
+            safety_controller = CommunicationSafetyController(
+                participants=self.participants,
+                mediator_ids=self.mediator_ids,
+                audit_reader_ids=self.audit_reader_ids,
+            )
+        elif (
+            tuple(safety_controller.participants) != self.participants
+            or tuple(safety_controller.mediator_ids) != self.mediator_ids
+            or tuple(safety_controller.audit_reader_ids) != self.audit_reader_ids
+        ):
+            raise ValueError("safety controller scope must match the message bus")
+        self.safety_controller = safety_controller
         self._messages: Tuple[MessageEnvelope, ...] = ()
         self._message_ids: set[MessageId] = set()
 
@@ -165,10 +189,91 @@ class MessageBus:
         return self.publish(envelope)
 
     def publish(self, envelope: MessageEnvelope) -> MessageEnvelope:
-        self._validate_for_delivery(envelope)
+        try:
+            self.safety_controller.preflight(envelope)
+        except Exception as safety_error:
+            from .safety import MessageSafetyError
+
+            if not isinstance(safety_error, MessageSafetyError):
+                raise
+            # Preserve the established structural routing error API while the
+            # safety controller retains the protected incident attempt.
+            self._validate_for_delivery(envelope)
+            raise
+        try:
+            self._validate_for_delivery(envelope)
+        except MessageRoutingError:
+            self.safety_controller.record_routing_violation(envelope)
+            raise
+        self.safety_controller.record_delivery()
         self._messages = self._messages + (envelope,)
         self._message_ids.add(envelope.message_id)
         return envelope
+
+    def preflight(
+        self,
+        *,
+        sender: ParticipantId,
+        recipients: Tuple[ParticipantId, ...],
+        timestamp: datetime,
+        message_type: MessageType,
+        visibility: MessageVisibility,
+        content: str,
+        correlation_id: Optional[CorrelationId] = None,
+        referenced_offer_id: Optional[OfferId] = None,
+        referenced_action_id: Optional[ActionId] = None,
+    ) -> MessageEnvelope:
+        """Validate a prospective message without delivering or counting safe content."""
+
+        sequence_number = len(self._messages) + 1
+        envelope = MessageEnvelope(
+            message_id=MessageId(f"message-{sequence_number}"),
+            sender=sender,
+            recipients=recipients,
+            timestamp=timestamp,
+            sequence_number=sequence_number,
+            negotiation_id=self.negotiation_id,
+            message_type=message_type,
+            visibility=visibility,
+            content=content,
+            correlation_id=correlation_id or CorrelationId(f"correlation-message-{sequence_number}"),
+            referenced_offer_id=referenced_offer_id,
+            referenced_action_id=referenced_action_id,
+        )
+        try:
+            self.safety_controller.preflight(envelope)
+        except Exception as safety_error:
+            from .safety import MessageSafetyError
+
+            if not isinstance(safety_error, MessageSafetyError):
+                raise
+            self._validate_for_delivery(envelope)
+            raise
+        try:
+            self._validate_for_delivery(envelope)
+        except MessageRoutingError:
+            self.safety_controller.record_routing_violation(envelope)
+            raise
+        return envelope
+
+    @property
+    def safety_incidents(self) -> Tuple["SecurityIncident", ...]:
+        return self.safety_controller.incidents
+
+    @property
+    def safety_metrics(self) -> "SafetyMetrics":
+        return self.safety_controller.metrics
+
+    def protected_safety_audit(
+        self, viewer_id: ParticipantId
+    ) -> Tuple["ProtectedMessageRecord", ...]:
+        return self.safety_controller.protected_audit_view(viewer_id)
+
+    def verify_protected_safety_audit(self, viewer_id: ParticipantId) -> bool:
+        from .safety import verify_protected_records
+
+        records = self.safety_controller.protected_audit_view(viewer_id)
+        return verify_protected_records(records, self.safety_controller.incidents)
 
     def _validate_for_delivery(self, envelope: MessageEnvelope) -> None:
         if envelope.negotiation_id != self.negotiation_id:

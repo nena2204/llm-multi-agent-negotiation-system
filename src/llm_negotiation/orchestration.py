@@ -4,7 +4,7 @@ import hashlib
 import time
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Mapping, Optional, Protocol, Tuple, runtime_checkable
+from typing import Literal, Mapping, Optional, Protocol, Tuple, runtime_checkable
 
 from pydantic import Field, field_validator, model_validator
 
@@ -75,6 +75,14 @@ from .verification import (
     VerificationLogEntry,
     VerificationVerdict,
     VerifiedProtocolExecutor,
+)
+from .safety import (
+    AuditChainEntry,
+    MessageSafetyError,
+    SafetyMetrics,
+    SecurityIncident,
+    build_audit_chain,
+    verify_audit_chain,
 )
 
 
@@ -259,7 +267,7 @@ class EpisodeUsage(DomainModel):
 
 
 class EpisodeResult(DomainModel):
-    schema_version: str = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     scenario_id: str
     random_seed: int
     stop_reason: EpisodeStopReason
@@ -272,6 +280,9 @@ class EpisodeResult(DomainModel):
     metrics: DeterministicEvaluation
     usage: EpisodeUsage
     verification_log: Tuple[VerificationLogEntry, ...]
+    safety_metrics: SafetyMetrics
+    security_incidents: Tuple[SecurityIncident, ...]
+    audit_chain: Tuple[AuditChainEntry, ...]
     elapsed_time_ms: float = Field(ge=0.0, allow_inf_nan=False)
 
     @field_validator(
@@ -280,6 +291,8 @@ class EpisodeResult(DomainModel):
         "audit_events",
         "memory_references",
         "verification_log",
+        "security_incidents",
+        "audit_chain",
         mode="before",
     )
     @classmethod
@@ -308,6 +321,22 @@ class EpisodeResult(DomainModel):
             raise ValueError("episode metrics and usage must report the same model-call total")
         if self.metrics.telemetry.model_usage != self.usage.tokens:
             raise ValueError("episode metrics and usage must report the same token totals")
+        if self.safety_metrics.incident_count != len(self.security_incidents):
+            raise ValueError("episode safety metrics must match incident records")
+        if self.safety_metrics.delivered_messages != len(self.audit_messages):
+            raise ValueError("episode delivered-message metric must match the message audit")
+        if any(
+            incident.negotiation_id != self.scenario_id
+            for incident in self.security_incidents
+        ):
+            raise ValueError("episode security incidents must belong to the result scenario")
+        if not verify_audit_chain(
+            self.audit_chain,
+            self.audit_events,
+            self.audit_messages,
+            self.security_incidents,
+        ):
+            raise ValueError("episode audit chain verification failed")
         return self
 
 
@@ -563,7 +592,11 @@ class NegotiationOrchestrator:
             feasible_region=self.feasible_region,
             mediator_ids=mediator_ids,
         )
-        executor = VerifiedProtocolExecutor(protocol, self.verifier)
+        executor = VerifiedProtocolExecutor(
+            protocol,
+            self.verifier,
+            pre_transition_guard=self._preflight_action_communication,
+        )
         state = protocol.create_session()
         started = self.clock.monotonic()
         traces = []
@@ -638,9 +671,22 @@ class NegotiationOrchestrator:
                             ).transition.state
                             self._update_all_memories(protocol, state)
                             break
-                    mediated = self.mediation_service.apply(
-                        protocol, state, intervention, self.message_bus, self.clock.now()
-                    )
+                    try:
+                        mediated = self.mediation_service.apply(
+                            protocol, state, intervention, self.message_bus, self.clock.now()
+                        )
+                    except MessageSafetyError as exc:
+                        if config.failure_policy is FailurePolicy.RAISE:
+                            raise OrchestrationError(
+                                "mediator message was blocked by communication safety"
+                            ) from exc
+                        state = self._verified_withdraw(
+                            executor,
+                            state,
+                            "Mediator message blocked by communication safety policy.",
+                        ).transition.state
+                        self._update_all_memories(protocol, state)
+                        break
                     state = mediated.transition.state
                     after_usage = getattr(self.mediator, "last_usage", LLMUsage())
                     latency = float(getattr(self.mediator, "last_latency_ms", 0.0))
@@ -708,16 +754,34 @@ class NegotiationOrchestrator:
                 candidate = self._budget_failure(state, actor_id, "Per-action timeout reached.")
 
             state_before_transition = state
-            verified = executor.submit(
-                state,
-                self.profiles[actor_id],
-                candidate,
-                declared_strategy=((policy.name,) if policy is not None else ("budget-fallback",)),
-                authorized_communication_recipients=tuple(
-                    item for item in participant_ids if item != actor_id
-                ),
-                correction_provider=self.correction_providers.get(actor_id),
-            )
+            try:
+                if isinstance(candidate, (MessageAction, RequestMediationAction)):
+                    self._preflight_action_communication(state, candidate)
+                verified = executor.submit(
+                    state,
+                    self.profiles[actor_id],
+                    candidate,
+                    declared_strategy=((policy.name,) if policy is not None else ("budget-fallback",)),
+                    authorized_communication_recipients=tuple(
+                        item for item in participant_ids if item != actor_id
+                    ),
+                    correction_provider=self.correction_providers.get(actor_id),
+                )
+            except MessageSafetyError:
+                invalid_actor_ids.append(actor_id)
+                verified = executor.submit(
+                    state,
+                    self.profiles[actor_id],
+                    self._withdraw_action(
+                        state,
+                        actor_id,
+                        "Message blocked by communication safety policy.",
+                    ),
+                    declared_strategy=("communication-safety-fallback",),
+                    authorized_communication_recipients=tuple(
+                        item for item in participant_ids if item != actor_id
+                    ),
+                )
             if (
                 verified.verification.results
                 and verified.verification.results[0].verdict is VerificationVerdict.REJECT
@@ -762,6 +826,9 @@ class NegotiationOrchestrator:
             self.evaluation_configuration,
         )
         snapshots = self.memory_store.snapshots()
+        incidents = self.message_bus.safety_incidents
+        audit_messages = self.message_bus.audit_view(self.audit_reader_id)
+        audit_chain = build_audit_chain(state.event_sequence, audit_messages, incidents)
         return EpisodeResult(
             scenario_id=self.scenario.scenario_id,
             random_seed=self.random_seed,
@@ -769,7 +836,7 @@ class NegotiationOrchestrator:
             outcome=state.outcome,
             final_session=state,
             public_transcript=self.message_bus.public_transcript(),
-            audit_messages=self.message_bus.audit_view(self.audit_reader_id),
+            audit_messages=audit_messages,
             audit_events=state.event_sequence,
             memory_references=tuple(_memory_reference(item) for item in snapshots),
             metrics=metrics,
@@ -780,11 +847,22 @@ class NegotiationOrchestrator:
                 records=records,
             ),
             verification_log=self.verifier.audit_log,
+            safety_metrics=self.message_bus.safety_metrics,
+            security_incidents=incidents,
+            audit_chain=audit_chain,
             elapsed_time_ms=elapsed_ms,
         )
 
     def replay(self, result: EpisodeResult) -> Tuple[NegotiationSession, DeterministicEvaluation]:
         """Reconstruct state and authoritative metrics from immutable episode artifacts."""
+
+        if not verify_audit_chain(
+            result.audit_chain,
+            result.audit_events,
+            result.audit_messages,
+            result.security_incidents,
+        ):
+            raise OrchestrationError("cannot replay an episode with a modified audit chain")
 
         protocol = self.protocol_factory.create(
             scenario=self.scenario,
@@ -1006,6 +1084,45 @@ class NegotiationOrchestrator:
                 correlation_id=event.correlation_id,
                 referenced_action_id=getattr(event, "action_id", None),
             )
+
+    def _preflight_action_communication(
+        self, state: NegotiationSession, action: NegotiationAction
+    ) -> None:
+        """Apply the exact eventual message boundary before protocol state changes."""
+
+        if isinstance(action, RequestMediationAction):
+            self.message_bus.preflight(
+                sender=action.actor_id,
+                recipients=tuple(
+                    item for item in self.message_bus.participants
+                    if item != action.actor_id
+                ),
+                timestamp=self.clock.now(),
+                message_type=MessageType.MEDIATION_REQUEST,
+                visibility=MessageVisibility.PUBLIC,
+                content=action.reason or "I request mediation.",
+            )
+            return
+        if not isinstance(action, MessageAction):
+            return
+        all_other_bus_participants = tuple(
+            item for item in self.message_bus.participants if item != action.actor_id
+        )
+        public = set(action.recipients) == set(self._other_participants(action.actor_id))
+        self.message_bus.preflight(
+            sender=action.actor_id,
+            recipients=all_other_bus_participants if public else action.recipients,
+            timestamp=self.clock.now(),
+            message_type=(
+                MessageType.CRITIQUE
+                if state.protocol_stage.value == "deliberation"
+                else MessageType.INTENT_SIGNAL
+            ),
+            visibility=(
+                MessageVisibility.PUBLIC if public else MessageVisibility.DIRECT_PRIVATE
+            ),
+            content=action.content,
+        )
 
     def _other_participants(self, actor_id: ParticipantId) -> Tuple[ParticipantId, ...]:
         return tuple(
