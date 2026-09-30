@@ -145,7 +145,7 @@ def generate_offer_for_utility(
         else:
             raise PolicyError(f"preferences do not match public issue '{issue.issue_id}'")
 
-    offer = Offer(offer_id=offer_id, values=tuple(values))
+    offer = enforce_budget(scenario, preferences, Offer(offer_id=offer_id, values=tuple(values)))
     scenario.validate_offer(offer)
     actual_utility = calculate_utility(scenario, offer, preferences)
     if actual_utility + UTILITY_TOLERANCE < reservation:
@@ -153,6 +153,37 @@ def generate_offer_for_utility(
             f"generated offer utility {actual_utility} is below reservation utility {reservation}"
         )
     return offer
+
+
+def enforce_budget(
+    scenario: NegotiationScenario,
+    preferences: ParticipantPreferences,
+    offer: Offer,
+) -> Offer:
+    """Clamp the offer price to the participant's private budget limit.
+
+    The limit is ``limit_price`` unless every required attribute is met, in which case the
+    configured concession (default 30%) is allowed. Clamping moves the price in the
+    participant's own favour, so utility never decreases.
+    """
+
+    limit = preferences.price_limit_for(offer)
+    if limit is None or preferences.budget_violation(offer) is None:
+        return offer
+    issue = scenario.issue(preferences.budget.price_issue_id)
+    if not isinstance(issue, NumericIssue):
+        raise PolicyError("budget price issue must be numeric")
+    clamped = min(issue.maximum, max(issue.minimum, limit))
+    values = tuple(
+        NumericIssueValue(issue_id=item.issue_id, value=clamped)
+        if item.issue_id == issue.issue_id
+        else item
+        for item in offer.values
+    )
+    adjusted = Offer(offer_id=offer.offer_id, values=values)
+    if preferences.budget_violation(adjusted) is not None:
+        raise PolicyError("no legal price satisfies the participant budget")
+    return adjusted
 
 
 def _progress(memory: MemorySnapshot) -> float:
@@ -209,8 +240,10 @@ class _OfferPolicy:
         outstanding = memory.working.outstanding_offer
         if outstanding is not None:
             offered_utility = calculate_utility(memory.scenario, outstanding, preferences)
-            if offered_utility + UTILITY_TOLERANCE >= target and offered_utility + UTILITY_TOLERANCE >= (
-                preferences.reservation.reservation_utility
+            if (
+                offered_utility + UTILITY_TOLERANCE >= target
+                and offered_utility + UTILITY_TOLERANCE >= preferences.reservation.reservation_utility
+                and preferences.budget_violation(outstanding) is None
             ):
                 if ActionType.ACCEPT not in memory.working.legal_actions:
                     raise PolicyError("working memory does not permit accepting the outstanding offer")

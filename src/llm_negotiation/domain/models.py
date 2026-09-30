@@ -213,6 +213,82 @@ class ReservationPolicy(DomainModel):
     batna_description: Optional[str] = Field(default=None, max_length=500)
 
 
+class AttributeRequirement(DomainModel):
+    """One private attribute condition that must hold before a budget concession is allowed.
+
+    Categorical issues use ``acceptable_values``; numeric issues use ``minimum`` and/or
+    ``maximum``. Exactly one of the two forms must be supplied.
+    """
+
+    issue_id: IssueId
+    acceptable_values: Optional[Tuple[str, ...]] = None
+    minimum: Optional[float] = Field(default=None, allow_inf_nan=False)
+    maximum: Optional[float] = Field(default=None, allow_inf_nan=False)
+
+    @field_validator("acceptable_values", mode="before")
+    @classmethod
+    def values_from_json_array(cls, value: Any) -> Any:
+        return _json_array_to_tuple(value)
+
+    @model_validator(mode="after")
+    def one_requirement_form(self) -> AttributeRequirement:
+        categorical = self.acceptable_values is not None
+        numeric = self.minimum is not None or self.maximum is not None
+        if categorical == numeric:
+            raise ValueError(
+                "attribute requirement needs either acceptable_values or numeric minimum/maximum"
+            )
+        if categorical and (
+            not self.acceptable_values
+            or len(set(self.acceptable_values)) != len(self.acceptable_values)
+        ):
+            raise ValueError("acceptable_values must be a non-empty set of unique values")
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError("attribute requirement minimum must not exceed maximum")
+        return self
+
+    def is_met_by(self, offer: Offer) -> bool:
+        value = offer.value_for(self.issue_id)
+        if self.acceptable_values is not None:
+            return isinstance(value, CategoricalIssueValue) and value.value in self.acceptable_values
+        if not isinstance(value, NumericIssueValue):
+            return False
+        if self.minimum is not None and value.value < self.minimum:
+            return False
+        if self.maximum is not None and value.value > self.maximum:
+            return False
+        return True
+
+
+class BudgetPolicy(DomainModel):
+    """Private hard price limit with a conditional concession.
+
+    For a participant who minimizes price (buyer) ``limit_price`` is the maximum price; an
+    offer may exceed it by at most ``maximum_concession_fraction`` (default 30%) and only when
+    every ``required_attributes`` condition is met. For a participant who maximizes price
+    (seller) ``limit_price`` is the minimum price and the concession goes downwards.
+    """
+
+    price_issue_id: IssueId
+    limit_price: float = Field(gt=0.0, allow_inf_nan=False)
+    maximum_concession_fraction: float = Field(default=0.30, ge=0.0, le=1.0, allow_inf_nan=False)
+    required_attributes: Tuple[AttributeRequirement, ...] = Field(min_length=1)
+
+    @field_validator("required_attributes", mode="before")
+    @classmethod
+    def requirements_from_json_array(cls, value: Any) -> Any:
+        return _json_array_to_tuple(value)
+
+    @model_validator(mode="after")
+    def valid_requirements(self) -> BudgetPolicy:
+        issue_ids = [item.issue_id for item in self.required_attributes]
+        if len(set(issue_ids)) != len(issue_ids):
+            raise ValueError("budget policy may contain only one requirement per issue")
+        if self.price_issue_id in issue_ids:
+            raise ValueError("the price issue cannot also be a required attribute")
+        return self
+
+
 class ParticipantPreferences(DomainModel):
     """Private utility information belonging to exactly one participant.
 
@@ -223,6 +299,7 @@ class ParticipantPreferences(DomainModel):
     participant_id: ParticipantId
     issue_preferences: Tuple[IssuePreference, ...] = Field(min_length=1)
     reservation: ReservationPolicy
+    budget: Optional[BudgetPolicy] = None
 
     @field_validator("issue_preferences", mode="before")
     @classmethod
@@ -239,7 +316,62 @@ class ParticipantPreferences(DomainModel):
             raise InvalidWeightsError(
                 f"issue weights must sum to 1 within {WEIGHT_SUM_TOLERANCE}; got {weight_sum}"
             )
+        if self.budget is not None:
+            by_issue = {preference.issue_id: preference for preference in self.issue_preferences}
+            if not isinstance(by_issue.get(self.budget.price_issue_id), NumericPreference):
+                raise ValueError("budget price issue must be a numeric issue in the preferences")
+            for requirement in self.budget.required_attributes:
+                preference = by_issue.get(requirement.issue_id)
+                if preference is None:
+                    raise ValueError(
+                        f"budget requirement issue '{requirement.issue_id}' is not in the preferences"
+                    )
+                if (requirement.acceptable_values is not None) != isinstance(
+                    preference, CategoricalPreference
+                ):
+                    raise ValueError(
+                        f"budget requirement for '{requirement.issue_id}' does not match the issue kind"
+                    )
         return self
+
+    def price_limit_for(self, offer: Offer) -> Optional[float]:
+        """Return the price limit that applies to ``offer`` (None without a budget).
+
+        The concession is granted only when every required attribute is satisfied.
+        """
+
+        if self.budget is None:
+            return None
+        budget = self.budget
+        if not all(item.is_met_by(offer) for item in budget.required_attributes):
+            return budget.limit_price
+        fraction = budget.maximum_concession_fraction
+        if self._price_direction() is PreferenceDirection.MINIMIZE:
+            return budget.limit_price * (1.0 + fraction)
+        return budget.limit_price * (1.0 - fraction)
+
+    def budget_violation(self, offer: Offer) -> Optional[str]:
+        """Return a human-readable reason when ``offer`` breaks the budget, otherwise None."""
+
+        limit = self.price_limit_for(offer)
+        if limit is None:
+            return None
+        value = offer.value_for(self.budget.price_issue_id)
+        if not isinstance(value, NumericIssueValue):
+            return "offer price is not numeric"
+        tolerance = 1e-9 * max(1.0, abs(limit))
+        if self._price_direction() is PreferenceDirection.MINIMIZE:
+            if value.value > limit + tolerance:
+                return f"price {value.value:g} exceeds the allowed maximum {limit:g}"
+        elif value.value < limit - tolerance:
+            return f"price {value.value:g} is below the allowed minimum {limit:g}"
+        return None
+
+    def _price_direction(self) -> PreferenceDirection:
+        for preference in self.issue_preferences:
+            if preference.issue_id == self.budget.price_issue_id:
+                return preference.direction
+        raise PreferenceIssueMismatchError("budget price issue is missing from preferences")
 
 
 class NegotiationActionBase(DomainModel):

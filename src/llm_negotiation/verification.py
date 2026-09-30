@@ -75,6 +75,7 @@ class VerificationReasonCode(str, Enum):
     STALE_COUNTEROFFER = "stale_counteroffer"
     FABRICATED_OFFER_ID = "fabricated_offer_id"
     RESERVATION_UTILITY_VIOLATION = "reservation_utility_violation"
+    BUDGET_LIMIT_VIOLATION = "budget_limit_violation"
     DEADLINE_VIOLATION = "deadline_violation"
     UNAUTHORIZED_COMMUNICATION = "unauthorized_communication"
     PROMPT_INJECTION = "prompt_injection"
@@ -396,6 +397,12 @@ class DeterministicActionVerifier:
                         VerificationReasonCode.RESERVATION_UTILITY_VIOLATION,
                         "Candidate offer is below the proposer's reservation utility.",
                     )
+                if context.actor_profile.preferences.budget_violation(offer) is not None:
+                    _append_reason(
+                        reasons,
+                        VerificationReasonCode.BUDGET_LIMIT_VIOLATION,
+                        "Candidate offer price is outside the proposer's budget limit.",
+                    )
 
         if isinstance(action, AcceptAction):
             outstanding = context.state.latest_valid_offer
@@ -422,6 +429,12 @@ class DeterministicActionVerifier:
                         reasons,
                         VerificationReasonCode.RESERVATION_UTILITY_VIOLATION,
                         "Acceptance would cross the proposer's reservation utility.",
+                    )
+                if context.actor_profile.preferences.budget_violation(outstanding) is not None:
+                    _append_reason(
+                        reasons,
+                        VerificationReasonCode.BUDGET_LIMIT_VIOLATION,
+                        "Acceptance price is outside the acceptor's budget limit.",
                     )
         elif isinstance(action, CounterAction):
             outstanding = context.state.latest_valid_offer
@@ -744,6 +757,11 @@ class LLMActionCorrector:
                     ),
                     "own_reservation_utility": (
                         memory.long_term.own_preferences.reservation.reservation_utility
+                    ),
+                    "own_budget": (
+                        memory.long_term.own_preferences.budget.model_dump(mode="json")
+                        if memory.long_term.own_preferences.budget is not None
+                        else None
                     ),
                     "own_issue_preferences": tuple(
                         preference.model_dump(mode="json")

@@ -40,6 +40,32 @@ non-binding: participants must explicitly accept, counter, or reject them. A tru
 may mark the feasible region `impossible` during session
 creation, allowing deterministic failure without adding private preference data to public state.
 
+## Conditional budget concession
+
+`ParticipantPreferences.budget` (a private `BudgetPolicy`) adds a hard price limit that may be
+stretched only when the offer satisfies the attributes the participant cares about:
+
+```python
+BudgetPolicy(
+    price_issue_id=IssueId("price"),
+    limit_price=300.0,                    # buyer: maximum price
+    maximum_concession_fraction=0.30,     # may go up to 300 * 1.3 = 390 ...
+    required_attributes=(                 # ... only if ALL of these hold for that offer
+        AttributeRequirement(issue_id=IssueId("warranty"), acceptable_values=("3y",)),
+        AttributeRequirement(issue_id=IssueId("delivery_days"), maximum=7.0),
+    ),
+)
+```
+
+- Buyer (price `MINIMIZE`): 350 with a 3-year warranty and 5-day delivery is accepted; 350 with a
+  1-year warranty or 400 with every attribute met is refused.
+- Seller (price `MAXIMIZE`): `limit_price` is the minimum price and the concession goes downwards.
+- The rule is enforced in addition to reservation utility: baseline policies clamp generated offers
+  and never accept over-budget offers, `LLMNegotiationPolicy` rejects grounded actions that break
+  it, and the deterministic verifier reports `budget_limit_violation`.
+- The budget is private: its field names are on the communication-safety prohibited list.
+- Legacy price-only runs (CLI/Streamlit) are unchanged, since they have no attributes to satisfy.
+
 ## Baseline negotiation policies
 
 Policies implement the typed `NegotiationPolicy` interface. They receive an immutable, bounded

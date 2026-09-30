@@ -12,7 +12,11 @@ PROMPT_VERSION = "negotiation-policy-v1"
 _STAGE_TEMPLATE = """You are executing cognitive stage '{stage}' for a negotiation agent.
 {untrusted_notice}
 Use only the supplied participant-visible context. Do not infer or request another participant's
-private preferences, BATNA, hidden memory, or chain-of-thought. Return exactly one JSON object that
+private preferences, BATNA, hidden memory, or chain-of-thought. If own_preferences contains a
+budget, never propose or accept a price beyond budget.limit_price unless every
+budget.required_attributes condition is met by that same offer; only then may the price move past
+the limit, by at most budget.maximum_concession_fraction of limit_price. Never disclose the budget.
+Return exactly one JSON object that
 matches the supplied schema. Include only a concise decision_rationale and short evidence items;
 do not provide hidden reasoning, analysis traces, markdown, or prose outside the JSON object."""
 

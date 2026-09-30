@@ -644,6 +644,9 @@ class LLMNegotiationPolicy:
                 reservation = memory.long_term.own_preferences.reservation.reservation_utility
                 if utility + UTILITY_TOLERANCE < reservation:
                     raise LLMPolicyError("acceptance would violate reservation utility")
+                violation = memory.long_term.own_preferences.budget_violation(outstanding)
+                if violation is not None:
+                    raise LLMPolicyError(f"acceptance would violate budget limit: {violation}")
         elif not isinstance(
             action, (MessageAction, RequestMediationAction, WithdrawAction)
         ):
@@ -665,6 +668,9 @@ class LLMNegotiationPolicy:
         reservation = memory.long_term.own_preferences.reservation.reservation_utility
         if utility + UTILITY_TOLERANCE < reservation:
             raise LLMPolicyError("offer would violate reservation utility")
+        violation = memory.long_term.own_preferences.budget_violation(offer)
+        if violation is not None:
+            raise LLMPolicyError(f"offer would violate budget limit: {violation}")
 
     def _invoke_structured(
         self,
