@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "experiment_id": "live-openai-small",
+  "dataset_version": "1.0",
+  "scenario_ids": [
+    "price-feasible-symmetric",
+    "multi-issue-asymmetric"
+  ],
+  "baselines": [
+    "deterministic",
+    "single_llm"
+  ],
+  "deterministic_policy_names": [
+    "linear"
+  ],
+  "models": [
+    {
+      "provider": "openai",
+      "model": "REPLACE_WITH_MODEL",
+      "temperature": 0.0,
+      "timeout_seconds": 60.0
+    }
+  ],
+  "seeds": [
+    1
+  ],
+  "rounds": 6,
+  "budgets": {
+    "episode_timeout_seconds": 300.0,
+    "action_timeout_seconds": 90.0,
+    "maximum_model_calls": 60,
+    "maximum_actions": null,
+    "maximum_total_tokens": 200000,
+    "estimated_cost_per_1k_tokens": 0.0
+  },
+  "enabled_components": {
+    "memory": true,
+    "theory_of_mind": true,
+    "verifier": true,
+    "mediator": false,
+    "communication": true,
+    "team_size": null,
+    "deliberation_depth": 1,
+    "confidence_visibility": true
+  },
+  "evaluation_partition": "evaluation"
+}

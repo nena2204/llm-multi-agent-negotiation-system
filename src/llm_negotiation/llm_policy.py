@@ -69,6 +69,50 @@ EVIDENCE_LIMIT = 10
 UTILITY_TOLERANCE = 1e-9
 
 
+_FREE_TEXT_FIELDS = ("decision_rationale", "objective", "hypothesis")
+_FREE_TEXT_LISTS = {"evidence": EVIDENCE_LIMIT, "constraints": 10, "plan": 10}
+
+
+def _shorten(text: str) -> str:
+    return text if len(text) <= RATIONALE_LIMIT else text[: RATIONALE_LIMIT - 3].rstrip() + "..."
+
+
+def normalize_stage_json(raw: str) -> str:
+    """Make explanatory fields of a model answer fit the audited limits.
+
+    Real models (unlike the offline fake) often write rationales longer than the 500-character
+    audit limit or list more than ten constraints. Those fields are explanations only, so they
+    are shortened instead of rejecting an otherwise valid answer. Markdown code fences are
+    removed. The typed ``action`` object is never modified: offers, identifiers, recipients and
+    rounds remain subject to the full strict schema and grounding checks.
+    """
+
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return text
+    if not isinstance(data, dict):
+        return text
+    for key in _FREE_TEXT_FIELDS:
+        if isinstance(data.get(key), str):
+            data[key] = _shorten(data[key])
+    for key, limit in _FREE_TEXT_LISTS.items():
+        value = data.get(key)
+        if isinstance(value, list):
+            items = [_shorten(item) if isinstance(item, str) else item for item in value]
+            items = [item for item in items if not (isinstance(item, str) and not item.strip())]
+            data[key] = items[:limit]
+    return json.dumps(data, ensure_ascii=False)
+
+
 class LLMPolicyError(PolicyError):
     """Raised when neither model output nor the deterministic fallback can act safely."""
 
@@ -685,7 +729,7 @@ class LLMNegotiationPolicy:
         messages = stage_messages(stage.value, schema, context)
         raw = self._call_model(stage, messages, telemetry)
         try:
-            result = output_type.model_validate_json(raw)
+            result = output_type.model_validate_json(normalize_stage_json(raw))
         except (ValidationError, ValueError):
             telemetry[stage].failure_code = "malformed_structured_output"
             if not recovery.consume():
@@ -724,7 +768,7 @@ class LLMNegotiationPolicy:
         )
         raw = self._call_model(stage, messages, telemetry)
         try:
-            result = output_type.model_validate_json(raw)
+            result = output_type.model_validate_json(normalize_stage_json(raw))
         except (ValidationError, ValueError) as error:
             telemetry[stage].succeeded = False
             telemetry[stage].failure_code = "repair_failed"

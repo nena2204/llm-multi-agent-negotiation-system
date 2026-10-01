@@ -35,6 +35,8 @@ from llm_negotiation.llm import (
     RetryConfiguration,
 )
 from llm_negotiation.llm_policy import (
+    StructuredActionDecision,
+    normalize_stage_json,
     CognitiveStage,
     LLMNegotiationPolicy,
 )
@@ -560,3 +562,45 @@ def test_fake_llm_policies_complete_a_full_protocol_negotiation():
         and entry.used_fallback is False
         for entry in result.verification_log
     )
+
+
+def test_long_explanations_from_real_models_are_shortened_not_rejected():
+    # Observed with gpt-4.1-mini: rationales longer than 500 characters, 12 constraints and
+    # fenced JSON caused repair failures and needless fallbacks.
+    snapshot = memory_snapshot()
+    long_text = "The seller has not moved enough on price, so I keep my position. " * 15
+    objective = json.loads(objective_json())
+    objective["decision_rationale"] = long_text
+    objective["constraints"] = [f"Constraint number {index}." for index in range(12)]
+    plan = json.loads(plan_json())
+    plan["decision_rationale"] = long_text
+    action = "```json\n" + propose_json(snapshot) + "\n```"
+    client = FakeLLMClient(
+        queued=(
+            FakeResponse(text=json.dumps(objective)),
+            FakeResponse(text=hypothesis_json()),
+            FakeResponse(text=json.dumps(plan)),
+            FakeResponse(text=action),
+        )
+    )
+    policy = LLMNegotiationPolicy(client, fake_model_configuration())
+
+    chosen = policy.choose_action(snapshot)
+
+    assert isinstance(chosen, ProposeAction)
+    assert policy.last_trace.used_fallback is False
+    assert client.call_count == 4  # no repair call was needed
+    assert len(policy.last_trace.objective.constraints) == 10
+    assert len(policy.last_trace.objective.decision_rationale) <= 500
+    assert len(policy.last_trace.plan.decision_rationale) <= 500
+
+
+def test_normalization_never_relaxes_the_typed_action():
+    snapshot = memory_snapshot()
+    action = json.loads(propose_json(snapshot))
+    action["action"]["unexpected"] = "field"
+    action["action"]["offer"]["values"][0]["value"] = "50"
+    normalized = json.loads(normalize_stage_json(json.dumps(action)))
+    assert normalized["action"] == action["action"]
+    with pytest.raises(Exception):
+        StructuredActionDecision.model_validate_json(json.dumps(normalized))

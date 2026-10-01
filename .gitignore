@@ -13,3 +13,5 @@ pytest-cache-files-*/
 .vscode/
 *.log
 artifacts/
+live_log.jsonl
+live_*.txt
